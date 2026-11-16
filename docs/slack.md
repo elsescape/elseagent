@@ -34,6 +34,9 @@ people attach) and `files:write` (send files) under **OAuth & Permissions > Bot 
 then reinstall the app. Without them the agent still works, but can't open or send files.
 Likewise the stop button needs the `agent_session_stopped` bot event (**Event Subscriptions >
 Subscribe to bot events**); without it Slack shows "Stop isn't available for this agent".
+The app must also be declared an agent (`features.agent_view` and the `assistant:write` scope
+in the manifest, or the **Agent** page in the app settings; switching from `assistant_view`
+cannot be undone). After changing any of this, reinstall the app and hard-refresh Slack.
 
 ## In Slack
 
