@@ -1,24 +1,38 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_TEMPLATE } from "./config/index.ts";
 
 const entry = join(import.meta.dir, "index.ts");
 
-/** Run the CLI with HOME pointed at the test directory, so ~/.elseagent.yaml is isolated. */
+/**
+ * Run the CLI with HOME pointed at the test directory, so ~/.elseagent.yaml is isolated, and a
+ * stand-in `codex` (logged in) first on PATH, so the real CLI is neither needed nor touched.
+ */
 function run(args: string[], cwd: string) {
-  const proc = Bun.spawnSync(["bun", entry, ...args], { cwd, env: { ...process.env, HOME: cwd } });
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: cwd,
+    PATH: `${fakeBin}:${process.env.PATH}`,
+    CODEX_API_KEY: undefined,
+  };
+  const proc = Bun.spawnSync(["bun", entry, ...args], { cwd, env });
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 let dir: string;
+let fakeBin: string;
 beforeAll(async () => {
   // realpath: on macOS the tmpdir is a symlink (/var -> /private/var) and the CLI prints real paths.
   dir = await realpath(await mkdtemp(join(tmpdir(), "elseagent-cli-")));
+  fakeBin = await mkdtemp(join(tmpdir(), "elseagent-cli-bin-"));
+  await Bun.write(join(fakeBin, "codex"), "#!/bin/sh\nexit 0\n");
+  await chmod(join(fakeBin, "codex"), 0o755);
 });
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
+  await rm(fakeBin, { recursive: true, force: true });
 });
 
 describe("cli", () => {
