@@ -1,6 +1,6 @@
 /** What Codex returns at the end of a turn (enforced with the SDK's `outputSchema`). */
 export interface AgentReply {
-  /** False: stay silent (only honored for messages not addressed to the agent). */
+  /** False: stay silent (honored for scheduled runs and messages not addressed to the agent). */
   reply: boolean;
   /** Markdown posted to the chat. */
   message: string;
@@ -17,8 +17,8 @@ export const REPLY_SCHEMA = {
     reply: {
       type: "boolean",
       description:
-        "Whether to post your message. Always true, except for a message not addressed to you " +
-        "that you decide not to answer.",
+        "Whether to post your message. Always true, except for scheduled checks with nothing to report " +
+        "or a message not addressed to you that you decide not to answer.",
     },
     message: { type: "string", description: "Your reply, as Markdown (empty when not replying)." },
     choices: {
@@ -60,4 +60,41 @@ export function parseReply(finalResponse: string): AgentReply {
   } catch {
     return { reply: true, message: finalResponse, choices: [], files: [] };
   }
+}
+
+/** Scheduled results longer than this (characters or lines) are summarized, with details in the thread. */
+const SCHEDULED_ROOT_CHARS = 1200;
+const SCHEDULED_ROOT_LINES = 12;
+const SCHEDULED_SUMMARY_CHARS = 400;
+
+/**
+ * A scheduled run's notification: a first line `⏰ **Task name**`, then the result, or for a long result its opening
+ * paragraph (bounded) with the full text as `details`, to be posted in the thread.
+ */
+export function formatScheduledReply(
+  title: string,
+  text: string,
+): { root: string; details?: string } {
+  // Asterisks would end the bold early; angle brackets would turn into Slack mentions.
+  const name = title.replace(/[<>*]/g, "").replace(/\s+/g, " ").trim();
+  const heading = `⏰ **${name || "Scheduled task"}**`;
+  if (text.length <= SCHEDULED_ROOT_CHARS && text.split("\n").length <= SCHEDULED_ROOT_LINES) {
+    return { root: `${heading}\n\n${text}` };
+  }
+  return { root: `${heading}\n\n${summarize(text)}\n\nDetails in thread.`, details: text };
+}
+
+/** The opening paragraph, cut at a word boundary, never inside a code block or a character. */
+function summarize(text: string): string {
+  let opening = text.split(/\n\s*\n/, 1)[0]?.trim() || text.trim();
+  const fence = opening.indexOf("```");
+  if (fence >= 0) opening = opening.slice(0, fence).trim();
+  const chars = Array.from(opening);
+  if (chars.length <= SCHEDULED_SUMMARY_CHARS) {
+    if (!opening) return "(see the thread)";
+    return fence >= 0 ? `${opening}…` : opening;
+  }
+  const cut = chars.slice(0, SCHEDULED_SUMMARY_CHARS - 1).join("");
+  const space = cut.search(/\s\S*$/);
+  return `${(space > SCHEDULED_SUMMARY_CHARS / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

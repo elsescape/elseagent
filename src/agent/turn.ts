@@ -26,8 +26,9 @@ import {
   type SavedFile,
   saveAttachments,
 } from "./files.ts";
-import { parseReply, REPLY_SCHEMA } from "./reply.ts";
+import { formatScheduledReply, parseReply, REPLY_SCHEMA } from "./reply.ts";
 import { stopReason, type TurnRunner } from "./scheduler.ts";
+import { scheduledTaskName } from "./schedules.ts";
 import { describeItem, StatusTicker, THINKING } from "./status.ts";
 
 /**
@@ -85,7 +86,7 @@ export interface TurnDeps {
   codexFor(message: QueuedMessage): Pick<Codex, "startThread" | "resumeThread">;
   /** Throttling of the thread's loading status (tests shorten it). */
   statusOptions?: ConstructorParameters<typeof StatusTicker>[1];
-  sessions: Pick<SessionStore, "get" | "touch" | "reset" | "replied">;
+  sessions: Pick<SessionStore, "get" | "touch" | "trackThread" | "reset" | "replied">;
   /** To skip a passive message that a later queued message will see as context anyway. */
   queue: Pick<MessageQueue, "hasNewerPending">;
   threadOptions: ThreadOptions;
@@ -208,10 +209,10 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
   return async (message, signal) => {
     const scheduled = message.scheduleId !== null;
     const passive = message.mode === "passive";
-    let reply = deps.replyTo({ ...message, startsThread: scheduled });
+    const reply = deps.replyTo({ ...message, startsThread: scheduled });
     // Scheduled runs and slash commands have no user message to react to; passive messages
     // weren't addressed to the agent.
-    let quiet = !message.ts || passive;
+    const quiet = !message.ts || passive;
     const react = (name: string) => (quiet ? Promise.resolve() : reply.react(name));
     const unreact = (name: string) => (quiet ? Promise.resolve() : reply.unreact(name));
     await unreact(REACTIONS.queued);
@@ -234,17 +235,6 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     let conversation: { key: string; lastSeenTs: string } | null = scheduled
       ? null
       : { key: message.conversationKey, lastSeenTs: message.ts };
-    if (scheduled) {
-      const name = message.text.match(/^Scheduled task "(.*)" \(#\d+/)?.[1];
-      const ts = await reply.post(`Running scheduled task: ${name || `#${message.scheduleId}`}.`);
-      if (ts) {
-        conversation = { key: `${message.channel}:${ts}`, lastSeenTs: ts };
-        // Telegram returns a topic ID here, which cannot be used as a message reaction target.
-        const reactionTs = message.channel.startsWith("tg:") ? "" : ts;
-        reply = deps.replyTo({ channel: message.channel, ts: reactionTs, threadTs: ts });
-        quiet = !reactionTs;
-      }
-    }
     await react(REACTIONS.working);
 
     const startedAt = now();
@@ -256,16 +246,38 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     const turnSignal = AbortSignal.any([timeout, signal]);
 
     let replied = false;
+    const taskTitle = scheduled
+      ? scheduledTaskName(message.text) || `Task #${message.scheduleId}`
+      : "";
+    // A scheduled run's notification, once posted: later posts (an error) go in its thread.
+    let resultTs: string | undefined;
     const postAndTrack = async (
       text: string,
       choices: string[] = [],
       files: OutgoingFile[] = [],
     ) => {
-      const ts = await reply.post(text, choices, files);
+      if (!scheduled) {
+        await reply.post(text, choices, files);
+        replied = true;
+        return;
+      }
+      const inThread = (ts: string) =>
+        deps.replyTo({ channel: message.channel, ts: "", threadTs: ts });
+      if (resultTs) {
+        await inThread(resultTs).post(text, choices, files);
+        return;
+      }
+      const { root, details } = formatScheduledReply(taskTitle, text);
+      const ts = await reply.post(root, details ? [] : choices, details ? [] : files);
       replied = true;
-      if (scheduled && ts && !conversation) {
+      if (ts) {
+        resultTs = ts;
         conversation = { key: `${message.channel}:${ts}`, lastSeenTs: ts };
       }
+      if (!details) return;
+      // Without a thread (a Telegram chat without topics) the details follow in the chat.
+      const target = ts ? inThread(ts) : deps.replyTo({ channel: message.channel, ts: "" });
+      await target.post(details, choices, files);
     };
 
     // The "is thinking…" line at the bottom of the thread (none for scheduled runs, and none
@@ -326,8 +338,8 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       }
       await status.stop();
       const { reply: answer, message: text, choices, files: paths } = parseReply(finalResponse);
-      // Only a message the agent wasn't asked directly may go unanswered.
-      if (answer || message.mode === "direct") {
+      // Scheduled checks may stay silent even though their queue mode defaults to direct.
+      if (answer || (!scheduled && message.mode === "direct")) {
         const { files, problems } = await resolveReplyFiles(paths, workspace);
         const notes = problems.length ? `\n\n_Could not attach ${problems.join("; ")}._` : "";
         const body = text.trim() + notes;
@@ -368,6 +380,10 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       const where = conversation as { key: string; lastSeenTs: string } | null;
       const superseded = stopReason(signal)?.kind === "superseded";
       if (thread.id && where && !superseded) sessions.touch(where.key, thread.id, where.lastSeenTs);
+      // A silent scheduled run maps no conversation: track its Codex thread for cleanup.
+      else if (thread.id && scheduled && !where) {
+        sessions.trackThread(thread.id, message.conversationKey);
+      }
       if (replied && where) sessions.replied(where.key, message.user);
       await unreact(REACTIONS.working);
       if (failed && stopReason(signal)?.kind !== "superseded") await react(REACTIONS.failed);

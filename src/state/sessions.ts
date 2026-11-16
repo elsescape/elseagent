@@ -51,15 +51,31 @@ export class SessionStore {
           set: { threadId, lastActiveAt, lastSeenTs },
         })
         .run();
-      if (!threadId) return;
-      tx.insert(codexThreads)
-        .values({ threadId, conversationKey, lastUsedAt: lastActiveAt })
-        .onConflictDoUpdate({
-          target: codexThreads.threadId,
-          set: { conversationKey, lastUsedAt: lastActiveAt },
-        })
-        .run();
+      if (threadId) this.upsertThread(tx, threadId, conversationKey, lastActiveAt);
     });
+  }
+
+  /**
+   * Remember a Codex thread no conversation maps to (a scheduled run that stayed silent), so
+   * cleanup deletes it once it is old.
+   */
+  trackThread(threadId: string, conversationKey: string): void {
+    this.upsertThread(this.db, threadId, conversationKey, this.now());
+  }
+
+  private upsertThread(
+    db: Pick<StateDb, "insert">,
+    threadId: string,
+    conversationKey: string,
+    lastUsedAt: number,
+  ): void {
+    db.insert(codexThreads)
+      .values({ threadId, conversationKey, lastUsedAt })
+      .onConflictDoUpdate({
+        target: codexThreads.threadId,
+        set: { conversationKey, lastUsedAt },
+      })
+      .run();
   }
 
   /**

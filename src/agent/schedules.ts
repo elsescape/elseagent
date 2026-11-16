@@ -15,15 +15,24 @@ export interface CreateScheduleInput {
   createdBy: string;
 }
 
-/** What Codex is told on a scheduled run. */
+/** What Codex is told on a scheduled run. Its first line is read back by `scheduledTaskName`. */
 export function scheduledTaskInput(schedule: Schedule, at: number): string {
   return [
     `Scheduled task "${schedule.name}" (#${schedule.id}, created by <@${schedule.createdBy}>),`,
-    `running at ${formatTime(at, schedule.timezone)}. A start message has opened this run's thread`,
-    "(in Telegram, a new topic). Your reply is posted there; people may follow up to continue. Task:",
+    `running at ${formatTime(at, schedule.timezone)}. Your reply is posted as a new message`,
+    "(in Telegram, a new topic); people may follow up in its thread. The task name is added",
+    "automatically. For a long result, begin with a short summary paragraph (at most 400",
+    "characters); the full result is posted in the thread below it. Only when the task is a",
+    "check and there is nothing to report, return reply: false to post nothing; otherwise",
+    "always reply. Task:",
     "",
     schedule.prompt,
   ].join("\n");
+}
+
+/** The schedule name in a scheduled run's input (see `scheduledTaskInput`), if it has one. */
+export function scheduledTaskName(input: string): string | undefined {
+  return input.match(/^Scheduled task "(.*)" \(#\d+/)?.[1];
 }
 
 /** Creates schedules and queues their runs when they are due. */

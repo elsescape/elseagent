@@ -66,7 +66,7 @@ export interface ReplyTarget {
   /** Thread to post in; undefined/null posts top-level. */
   threadTs?: string | null;
   /**
-   * The reply starts a conversation of its own (a scheduled run's announcement). Slack posts it
+   * The reply starts a conversation of its own (a scheduled run's result). Slack posts it
    * top-level, where it starts a thread anyway; Telegram opens a new topic for it.
    */
   startsThread?: boolean;

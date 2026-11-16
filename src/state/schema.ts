@@ -46,7 +46,7 @@ export const queue = sqliteTable(
     status: text("status", { enum: ["pending", "running"] })
       .notNull()
       .default("pending"),
-    /** Set for a scheduled run: there is no user message; a start announcement opens the result thread. */
+    /** Set for a scheduled run: there is no user message; a posted result opens the conversation. */
     scheduleId: integer("schedule_id"),
     /**
      * direct: addressed to the agent, which answers. followup: a thread reply to the agent's last

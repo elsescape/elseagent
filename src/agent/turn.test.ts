@@ -96,6 +96,10 @@ function setup(
     context = { messages: [], omitted: 0 } as ThreadContext,
     items = [] as ThreadItem[],
     newerPending = false,
+    /** Posts return no ts (a Telegram chat without topics). */
+    noThreads = false,
+    /** Posts whose text matches throw. */
+    postFails = (_text: string): boolean => false,
   } = {},
 ) {
   const { codex, calls } = fakeCodex(behave, items);
@@ -109,10 +113,11 @@ function setup(
   const targets: ReplyTarget[] = [];
   const reply: Reply = {
     post: async (text, choices = [], files = []) => {
+      if (postFails(text)) throw new Error("post failed");
       posts.push(
         files.length ? { text, choices, files: files.map((f) => f.name) } : { text, choices },
       );
-      return `9${posts.length}.0`; // ts of the posted message
+      return noThreads ? undefined : `9${posts.length}.0`; // ts of the posted message
     },
     react: async (n) => void reactions.push(`+${n}`),
     unreact: async (n) => void reactions.push(`-${n}`),
@@ -333,7 +338,7 @@ describe("scheduled runs", () => {
     files: [],
   });
 
-  test("announces before execution, posts results in that thread, and keeps the session", async () => {
+  test("posts the result as a new conversation and keeps the session", async () => {
     const { run, calls, posts, reactions, sessions, contextCalls, statuses, targets } = setup(
       async () => json("CI is green."),
     );
@@ -348,12 +353,8 @@ describe("scheduled runs", () => {
         schema: REPLY_SCHEMA,
       },
     ]);
-    expect(posts).toEqual([
-      { text: "Running scheduled task: daily.", choices: [] },
-      { text: "CI is green.", choices: [] },
-    ]);
-    expect(targets[1]).toEqual({ channel: "C_OPS", ts: "91.0", threadTs: "91.0" });
-    expect(reactions).toEqual([`+${REACTIONS.working}`, `-${REACTIONS.working}`]);
+    expect(posts).toEqual([{ text: "⏰ **daily**\n\nCI is green.", choices: [] }]);
+    expect(reactions).toEqual([]);
     expect(statuses).toEqual([]); // and no thread to show a status in
     expect(contextCalls).toEqual([]);
     // Follow-ups in the posted message's thread continue this run's session.
@@ -361,20 +362,19 @@ describe("scheduled runs", () => {
     expect(sessions.get("schedule:3:1000", DAY)).toBeNull();
   });
 
-  test("failure marks the announcement, hides raw errors, and a reply resumes the run", async () => {
+  test("failure posts an error, hides raw details, and a reply resumes the run", async () => {
     let attempt = 0;
-    const { run, calls, posts, targets, reactions, sessions } = setup(async () => {
+    const { run, calls, posts, reactions, sessions } = setup(async () => {
       if (++attempt === 1) throw new Error('Failed to parse item: {"private":"webpage output');
       return json("Recovered.");
     });
     await run(scheduled(), never);
-    expect(posts[0]?.text).toBe("Running scheduled task: daily.");
-    expect(posts[1]?.text).toBe(
-      "The task failed. Reply in this thread to ask me to investigate or continue.",
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.text).toBe(
+      "⏰ **daily**\n\nThe task failed. Reply in this thread to ask me to investigate or continue.",
     );
     expect(JSON.stringify(posts)).not.toContain("private");
-    expect(targets[1]).toEqual({ channel: "C_OPS", ts: "91.0", threadTs: "91.0" });
-    expect(reactions.at(-1)).toBe(`+${REACTIONS.failed}`);
+    expect(reactions).toEqual([]);
     expect(sessions.get("C_OPS:91.0", DAY)?.threadId).toBe("thread-1");
     expect(sessions.followState("C_OPS:91.0")?.repliedTo).toBe("U1");
 
@@ -386,12 +386,76 @@ describe("scheduled runs", () => {
     expect(posts.at(-1)?.text).toBe("Recovered.");
   });
 
-  test("the announcement is delivered before Codex starts", async () => {
+  test("nothing is posted before Codex starts", async () => {
     const { run, posts } = setup(async () => {
-      expect(posts).toEqual([{ text: "Running scheduled task: daily.", choices: [] }]);
+      expect(posts).toEqual([]);
       return json("Done.");
     });
     await run(scheduled(), never);
+  });
+
+  test("reply false stays silent even with direct mode and leaves no conversation", async () => {
+    const { run, posts, reactions, statuses, sessions, usage } = setup(async () =>
+      json("", [], false),
+    );
+    await run(scheduled(), never);
+    expect(posts).toEqual([]);
+    expect(reactions).toEqual([]);
+    expect(statuses).toEqual([]);
+    expect(sessions.get("C_OPS:91.0", DAY)).toBeNull();
+    expect(sessions.get("schedule:3:1000", DAY)).toBeNull();
+    expect(usage).toHaveLength(1);
+  });
+
+  test("long results put a summary in the channel and details, buttons and files in its thread", async () => {
+    const details =
+      `Two services need attention.\n\n${"Investigation details. ".repeat(100)}`.trim();
+    const { run, posts, targets, sessions, workspace } = setup(async () =>
+      json(details, ["Investigate", "Dismiss"], true, ["report.txt"]),
+    );
+    await Bun.write(join(workspace, "report.txt"), "Full report");
+    await run(scheduled(), never);
+    expect(posts).toEqual([
+      { text: "⏰ **daily**\n\nTwo services need attention.\n\nDetails in thread.", choices: [] },
+      { text: details, choices: ["Investigate", "Dismiss"], files: ["report.txt"] },
+    ]);
+    expect(targets[1]).toEqual({ channel: "C_OPS", ts: "", threadTs: "91.0" });
+    expect(sessions.get("C_OPS:91.0", DAY)?.threadId).toBe("thread-1");
+  });
+
+  test("a silent run's Codex thread is tracked so cleanup can delete it", async () => {
+    const { run, sessions } = setup(async () => json("", [], false));
+    await run(scheduled(), never);
+    expect(sessions.unusedThreads(Date.now() + 1)).toEqual([
+      { threadId: "thread-1", conversationKey: "schedule:3:1000" },
+    ]);
+  });
+
+  test("without a thread (Telegram without topics) long results follow in the chat", async () => {
+    const details = `Summary.\n\n${"Details. ".repeat(200)}`.trim();
+    const { run, posts, targets } = setup(async () => json(details, ["Retry"]), {
+      noThreads: true,
+    });
+    await run(scheduled(), never);
+    expect(posts).toEqual([
+      { text: "⏰ **daily**\n\nSummary.\n\nDetails in thread.", choices: [] },
+      { text: details, choices: ["Retry"] },
+    ]);
+    expect(targets[1]).toEqual({ channel: "C_OPS", ts: "" });
+  });
+
+  test("an error after the result was posted goes in its thread", async () => {
+    const details = `Summary.\n\n${"Details. ".repeat(200)}`.trim();
+    const { run, posts, targets, sessions } = setup(async () => json(details), {
+      postFails: (text) => text === details,
+    });
+    await run(scheduled(), never);
+    expect(posts.map((p) => p.text)).toEqual([
+      "⏰ **daily**\n\nSummary.\n\nDetails in thread.",
+      "The task failed. Reply in this thread to ask me to investigate or continue.",
+    ]);
+    expect(targets.at(-1)).toEqual({ channel: "C_OPS", ts: "", threadTs: "91.0" });
+    expect(sessions.get("C_OPS:91.0", DAY)?.threadId).toBe("thread-1");
   });
 
   test("each run is a new session", async () => {

@@ -5,4 +5,4 @@ In threads you are part of, you also receive replies that don't mention you, int
 
 When someone asks you to stay out of a thread, or to follow it again, call the elseagent tool thread_follow and confirm briefly.
 
-Each scheduled run starts with a new message in a Slack channel (\`channel\`: a name like #ops or an ID; defaults to this one); people follow up in its thread.`;
+Scheduled results are posted as a new message in a Slack channel (\`channel\`: a name like #ops or an ID; defaults to this one); people follow up in its thread. A run returning reply: false posts nothing.`;
