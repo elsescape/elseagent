@@ -1,0 +1,38 @@
+# PR titles become the squash-merge commit message, so they must be Conventional Commits:
+# `type: summary` or `type(scope): summary`, e.g. "feat: stop a running turn".
+name: pr-title
+
+on:
+  # pull_request_target so it also runs for PRs from forks. Safe: nothing is checked out or run
+  # from the PR, only its title is read.
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          # The summary starts lowercase, like the existing history ("feat: read and send files").
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The summary "{subject}" in the PR title must start with a lowercase letter,
+            e.g. "feat: add a usage report".

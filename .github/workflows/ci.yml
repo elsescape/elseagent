@@ -1,0 +1,50 @@
+# Type check, lint, test and build on every PR and push to main.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4 # keep in step with the Dockerfile
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun check
+
+      - name: Lint and format
+        run: bunx biome ci .
+
+      - name: Test
+        run: bun test
+
+      # Schema changes must come with a generated migration.
+      - name: Migrations up to date
+        run: |
+          bunx drizzle-kit generate
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            git status --porcelain drizzle
+            echo "::error::src/state/schema.ts changed without a migration: run bun run db:generate and commit drizzle/"
+            exit 1
+          fi
+
+      - name: Build
+        run: bun run build
