@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Admin } from "./agent/admin.ts";
 import { Cleanup } from "./agent/cleanup.ts";
 import { createMessageHandler } from "./agent/inbox.ts";
+import { RecoveryStore } from "./agent/recovery.ts";
 import { Scheduler } from "./agent/scheduler.ts";
 import { ScheduleRunner } from "./agent/schedules.ts";
 import { createTurnRunner, REACTIONS } from "./agent/turn.ts";
@@ -117,6 +118,7 @@ export async function startApp(
           mcp: mcp && { url: mcp.url, token: mcp.token, turnId: message.id },
         }),
       sessions,
+      recovery: new RecoveryStore(join(stateDir, "recovery")),
       queue,
       threadOptions,
       replyTo: channels.replyTo,

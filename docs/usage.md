@@ -69,3 +69,24 @@ set their own, run at most every 5 minutes, and are limited to 50 per agent. A r
 the agent was down happens once after it restarts.
 
 Anyone who can talk to the agent can use these tools.
+
+## Interrupted execution and recovery
+
+Tool failures (such as a website timing out) remain tool results for Codex to handle.
+The agent is instructed to checkpoint independent batch items and continue other items
+when safe, rather than abandon the whole batch for one inaccessible source.
+
+The runner separately detects broken event streams, including a stream ending without
+`turn.completed`. It never silently discards malformed events. If the saved session is
+available and no tool operation is awaiting a result, it attempts one continuation of
+that same session within the original timeout. The continuation first reconciles saved
+progress; it does not replay the original task prompt. A model-reported failure,
+cancellation, timeout, or an operation with an unconfirmed result is not automatically
+retried.
+
+An unconfirmed command, MCP call or file change pauses automatic recovery. The runner
+keeps the session and stores operation IDs/types in `stateDir/recovery/` (not tool
+arguments or output). A reply in the failure thread receives reconciliation instructions
+before continuing. A successful conversational reply alone does not clear an uncertain
+operation. This is deliberately conservative: the generic runner cannot prove whether
+an arbitrary external write happened. Detailed errors remain in logs, not chat messages.

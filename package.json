@@ -31,5 +31,8 @@
     "croner": "^11.0.0",
     "drizzle-orm": "^0.45.4",
     "zod": "^4.6.7"
+  },
+  "patchedDependencies": {
+    "@openai/codex-sdk@0.169.0": "patches/@openai%2Fcodex-sdk@0.169.0.patch"
   }
 }

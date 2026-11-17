@@ -1,0 +1,49 @@
+diff --git a/dist/index.js b/dist/index.js
+index 04492aee5c59991ef0d40b0752a62d4b93a21338..d8764a54e671b589809f931b8880035e4dfeef87 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -141,7 +141,6 @@ function normalizeInput(input) {
+ import { spawn } from "child_process";
+ import { statSync } from "fs";
+ import path2 from "path";
+-import readline from "readline";
+ import { createRequire } from "module";
+ var INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+ var TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+@@ -293,14 +292,21 @@ var CodexExec = class {
+         });
+       }
+     );
+-    const rl = readline.createInterface({
+-      input: child.stdout,
+-      crlfDelay: Infinity
+-    });
++    // JSONL events are delimited by LF only. Bun readline also splits U+2028/U+2029,
++    // which are valid, unescaped characters inside JSON strings (e.g. webpage text).
++    const decoder = new TextDecoder();
++    let pending = "";
+     try {
+-      for await (const line of rl) {
+-        yield line;
++      for await (const chunk of child.stdout) {
++        pending += decoder.decode(chunk, { stream: true });
++        let newline;
++        while ((newline = pending.indexOf("\n")) !== -1) {
++          yield pending.slice(0, newline);
++          pending = pending.slice(newline + 1);
++        }
+       }
++      pending += decoder.decode();
++      if (pending) yield pending;
+       if (spawnError) throw spawnError;
+       const { code, signal } = await exitPromise;
+       if (code !== 0 || signal) {
+@@ -309,7 +315,7 @@ var CodexExec = class {
+         throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
+       }
+     } finally {
+-      rl.close();
++      child.stdout.destroy();
+       child.removeAllListeners();
+       try {
+         if (!child.killed) child.kill();

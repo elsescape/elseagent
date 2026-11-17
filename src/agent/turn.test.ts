@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Input, ThreadItem } from "@openai/codex-sdk";
 import type { Reply, ReplyTarget, ThreadContext } from "../channels/types.ts";
 import { openStateDb, type QueuedMessage, SessionStore, type UsageRecord } from "../state/index.ts";
+import { RecoveryStore } from "./recovery.ts";
 import { REPLY_SCHEMA } from "./reply.ts";
 import {
   createTurnRunner,
@@ -45,6 +46,7 @@ const json = (message: string, choices: string[] = [], reply = true, files: stri
 function fakeCodex(
   behave: (input: string, signal: AbortSignal) => Promise<string>,
   items: ThreadItem[] = [],
+  streamErrors: (Error | null)[] = [],
 ) {
   const calls: { kind: "start" | "resume"; id: string; input: Input; schema: unknown }[] = [];
   let next = 0;
@@ -62,10 +64,18 @@ function fakeCodex(
           input,
           schema: opts.outputSchema,
         });
+        const streamError = streamErrors[calls.length - 1];
         async function* events() {
           for (const item of items) yield { type: "item.started", item };
+          if (streamError) throw streamError;
           const prompt = typeof input === "string" ? input : (input[0] as { text: string }).text;
-          const text = await behave(prompt, opts.signal);
+          let text: string;
+          try {
+            text = await behave(prompt, opts.signal);
+          } catch (err) {
+            yield { type: "turn.failed", error: { message: String(err) } };
+            return;
+          }
           yield { type: "item.completed", item: { id: "m", type: "agent_message", text } };
           yield {
             type: "turn.completed",
@@ -95,6 +105,7 @@ function setup(
     turnTimeoutMs = 1_000,
     context = { messages: [], omitted: 0 } as ThreadContext,
     items = [] as ThreadItem[],
+    streamErrors = [] as (Error | null)[],
     newerPending = false,
     /** Posts return no ts (a Telegram chat without topics). */
     noThreads = false,
@@ -102,7 +113,7 @@ function setup(
     postFails = (_text: string): boolean => false,
   } = {},
 ) {
-  const { codex, calls } = fakeCodex(behave, items);
+  const { codex, calls } = fakeCodex(behave, items, streamErrors);
   const statuses: string[] = [];
   const posts: { text: string; choices: string[]; files?: string[] }[] = [];
   const downloads: string[] = [];
@@ -124,10 +135,12 @@ function setup(
     setStatus: async (text) => void statuses.push(text),
   };
   const sessions = new SessionStore(openStateDb(":memory:"));
+  const recovery = new RecoveryStore(join(workspace, "recovery"));
   const run = createTurnRunner({
     codexFor: () => codex,
     statusOptions: { minIntervalMs: 0, refreshMs: 60_000 },
     sessions,
+    recovery,
     threadOptions: { workingDirectory: workspace },
     queue: { hasNewerPending: () => newerPending },
     replyTo: (target) => {
@@ -160,6 +173,7 @@ function setup(
     downloads,
     workspace,
     usage,
+    recovery,
   };
 }
 
@@ -251,6 +265,84 @@ describe("turn runner", () => {
       },
     ]);
     expect(reactions.at(-1)).toBe(`+${REACTIONS.failed}`);
+  });
+});
+
+describe("stream failure isolation", () => {
+  test("continues the same session once without replaying the user request", async () => {
+    const { run, calls, posts, recovery } = setup(async () => json("Recovered."), {
+      streamErrors: [new Error("connection closed")],
+    });
+    await run(message(), never);
+    expect(calls.map((x) => x.kind)).toEqual(["start", "resume"]);
+    expect(calls[1]?.id).toBe(calls[0]?.id);
+    expect(calls[1]?.input).toContain("First reconcile");
+    expect(calls[1]?.input).not.toContain("<@U1>: fix the build");
+    expect(posts.at(-1)?.text).toBe("Recovered.");
+    expect(await recovery.get("C1:1.0")).toBeNull();
+  });
+
+  test("a second interruption stops instead of looping", async () => {
+    const { run, calls, posts, recovery } = setup(async () => json("unused"), {
+      streamErrors: [new Error("broken"), new Error("broken again")],
+    });
+    await run(message(), never);
+    expect(calls).toHaveLength(2);
+    expect(posts).toHaveLength(1);
+    expect(await recovery.get("C1:1.0")).toMatchObject({ threadId: "thread-1", pending: [] });
+  });
+
+  test("unconfirmed operations are not automatically repeated and survive into a follow-up", async () => {
+    const operation = {
+      id: "write-1",
+      type: "mcp_tool_call",
+      server: "admin",
+      tool: "update_place",
+      arguments: { secret: "do not persist" },
+      status: "in_progress",
+    } as ThreadItem;
+    const { run, calls, posts, sessions, recovery } = setup(
+      async () => json("Checked saved state."),
+      {
+        items: [operation],
+        streamErrors: [new Error("stream lost")],
+      },
+    );
+    await run(message(), never);
+    expect(calls).toHaveLength(1);
+    expect(posts[0]?.text).toContain("result is unconfirmed");
+    const checkpoint = await recovery.get("C1:1.0");
+    expect(checkpoint?.pending).toEqual([{ id: "write-1", type: "mcp_tool_call" }]);
+    expect(JSON.stringify(checkpoint)).not.toContain("secret");
+    expect(sessions.get("C1:1.0", DAY)?.threadId).toBe("thread-1");
+    await run(message("C1:1.0", "continue", "8.0"), never);
+    expect(calls[1]?.kind).toBe("resume");
+    expect(calls[1]?.input).toContain("write-1");
+    expect(calls[1]?.input).toContain("Do not repeat");
+    // A reply alone does not prove that the uncertain write was reconciled.
+    expect((await recovery.get("C1:1.0"))?.pending).toHaveLength(1);
+  });
+
+  test("recovery shares the original timeout rather than starting a fresh budget", async () => {
+    const { run, calls, posts } = setup(
+      (_input, signal) =>
+        new Promise<string>((_resolve, reject) => {
+          if (signal.aborted) reject(new Error("aborted"));
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+      { streamErrors: [new Error("connection closed")], turnTimeoutMs: 20 },
+    );
+    await run(message(), never);
+    expect(calls).toHaveLength(2);
+    expect(posts.at(-1)?.text).toContain("took longer than");
+  });
+
+  test("a model-reported failure is not treated as a broken transport", async () => {
+    const { run, calls } = setup(async () => {
+      throw new Error("rate limited");
+    });
+    await run(message(), never);
+    expect(calls).toHaveLength(1);
   });
 });
 

@@ -19,6 +19,7 @@ ARG DEBIAN_VERSION=trixie
 FROM oven/bun:1.4.4 AS build
 WORKDIR /src
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build

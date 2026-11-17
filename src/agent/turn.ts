@@ -26,6 +26,12 @@ import {
   type SavedFile,
   saveAttachments,
 } from "./files.ts";
+import {
+  FailedTurnError,
+  InterruptedStreamError,
+  type RecoveryStore,
+  recoveryInput,
+} from "./recovery.ts";
 import { formatScheduledReply, parseReply, REPLY_SCHEMA } from "./reply.ts";
 import { stopReason, type TurnRunner } from "./scheduler.ts";
 import { scheduledTaskName } from "./schedules.ts";
@@ -65,15 +71,32 @@ export async function runStreamed(
   options: TurnOptions,
   onItemStarted: (item: ThreadItem) => void,
 ): Promise<{ finalResponse: string; usage: Usage | null }> {
-  const { events } = await thread.runStreamed(input, options);
   let finalResponse = "";
   let usage: Usage | null = null;
-  for await (const event of events) {
-    if (event.type === "item.started") onItemStarted(event.item);
-    else if (event.type === "item.completed" && event.item.type === "agent_message") {
-      finalResponse = event.item.text;
-    } else if (event.type === "turn.completed") usage = event.usage;
-    else if (event.type === "turn.failed") throw new Error(event.error.message);
+  let completed = false;
+  const pending = new Map<string, { id: string; type: string }>();
+  try {
+    const { events } = await thread.runStreamed(input, options);
+    for await (const event of events) {
+      if (event.type === "item.started") {
+        if (["command_execution", "mcp_tool_call", "file_change"].includes(event.item.type)) {
+          pending.set(event.item.id, { id: event.item.id, type: event.item.type });
+        }
+        onItemStarted(event.item);
+      } else if (event.type === "item.completed") {
+        pending.delete(event.item.id);
+        if (event.item.type === "agent_message") finalResponse = event.item.text;
+      } else if (event.type === "turn.completed") {
+        usage = event.usage;
+        completed = true;
+      } else if (event.type === "turn.failed") {
+        throw new FailedTurnError(event.error.message, [...pending.values()]);
+      }
+    }
+    if (!completed) throw new Error("Event stream ended without turn.completed");
+  } catch (err) {
+    if (err instanceof FailedTurnError && !options.signal?.aborted) throw err;
+    throw new InterruptedStreamError(err, [...pending.values()], completed);
   }
   return { finalResponse, usage };
 }
@@ -95,6 +118,7 @@ export interface TurnDeps {
   threadContext(message: QueuedMessage, afterTs: string | null): Promise<ThreadContext>;
   /** Where each completed turn's token usage is recorded. */
   usage?: Pick<UsageStore, "record">;
+  recovery?: Pick<RecoveryStore, "get" | "save" | "clear">;
   now?: () => number;
   /** Download a file attached to a message in `chat` (see `Channel.download`). */
   download(chat: string, file: Attachment, dest: string, signal?: AbortSignal): Promise<void>;
@@ -221,6 +245,7 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     // conversation instead of racing it.
     if (isNewSessionCommand(message)) {
       sessions.reset(message.conversationKey, null);
+      await deps.recovery?.clear(message.conversationKey);
       await reply.post(NEW_SESSION_REPLY);
       return;
     }
@@ -287,17 +312,25 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     if (showStatus) status.set(THINKING);
 
     let failed = true;
+    let interruption: InterruptedStreamError | undefined;
     try {
+      const checkpoint = await deps.recovery?.get(message.conversationKey);
       const downloaded = new Map<string, SavedFile>();
       // A new session gets the whole thread so far; a continuing one only what it hasn't seen.
-      const runTurn = async (afterTs: string | null) => {
+      const runTurn = async (afterTs: string | null, recovering = false) => {
         const context = scheduled
           ? NO_CONTEXT
           : await deps.threadContext(message, afterTs).catch((err: Error): ThreadContext => {
               logger.warn(`could not read thread context: ${err.message}`);
               return NO_CONTEXT;
             });
-        const input = await withAttachments(message, context, turnSignal, downloaded);
+        let input = await withAttachments(message, context, turnSignal, downloaded);
+        if (recovering || checkpoint) {
+          input = recoveryInput(
+            recovering ? "Continue the interrupted task from saved progress." : input,
+            checkpoint?.pending ?? [],
+          );
+        }
         return runStreamed(
           thread,
           input,
@@ -313,12 +346,31 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
         result = await runTurn(session?.lastSeenTs ?? null);
       } catch (err) {
         // The conversation's Codex session was deleted: start a new one with the whole thread.
-        if (!session?.threadId || !isMissingThread(err) || turnSignal.aborted) throw err;
-        logger.warn(
-          `codex: session ${session.threadId} of ${message.conversationKey} is gone; starting a new one`,
-        );
-        thread = codex.startThread(threadOptions);
-        result = await runTurn(null);
+        if (turnSignal.aborted) throw err;
+        if (session?.threadId && isMissingThread(err)) {
+          logger.warn(
+            `codex: session ${session.threadId} of ${message.conversationKey} is gone; starting a new one`,
+          );
+          thread = codex.startThread(threadOptions);
+          result = await runTurn(null);
+        } else if (
+          err instanceof InterruptedStreamError &&
+          thread.id &&
+          !err.pending.length &&
+          !err.completed &&
+          !checkpoint?.pending.length &&
+          !passive
+        ) {
+          // One bounded continuation of the SAME session, never a replay of the request.
+          // In-flight tools are not retried: their side effects may already have happened.
+          logger.warn(
+            `codex: recovering interrupted stream for ${message.conversationKey}: ${err.message}`,
+          );
+          thread = codex.resumeThread(thread.id, threadOptions);
+          result = await runTurn(session?.lastSeenTs ?? null, true);
+        } else {
+          throw err;
+        }
       }
       const { finalResponse, usage } = result;
       if (usage) {
@@ -349,6 +401,10 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       }
       failed = false;
     } catch (err) {
+      if (err instanceof InterruptedStreamError) interruption = err;
+      else if (err instanceof FailedTurnError && err.pending.length) {
+        interruption = new InterruptedStreamError(err, err.pending);
+      }
       await status.stop();
       const stopped = stopReason(signal);
       if (stopped?.kind === "superseded") {
@@ -370,7 +426,9 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       } else {
         logger.warn(`codex: turn failed for ${message.conversationKey}: ${(err as Error).message}`);
         await postAndTrack(
-          "The task failed. Reply in this thread to ask me to investigate or continue.",
+          interruption?.pending.length
+            ? "The connection was interrupted while an operation was running. Its result is unconfirmed, so I have not retried it. Reply here to reconcile the saved state and continue."
+            : "The task failed. Reply in this thread to ask me to investigate or continue.",
         );
       }
     } finally {
@@ -383,6 +441,21 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       // A silent scheduled run maps no conversation: track its Codex thread for cleanup.
       else if (thread.id && scheduled && !where) {
         sessions.trackThread(thread.id, message.conversationKey);
+      }
+      if (where && thread.id) {
+        if (interruption) {
+          await deps.recovery?.save(where.key, {
+            threadId: thread.id,
+            pending: interruption.pending,
+            at: new Date(now()).toISOString(),
+          });
+        } else if (!failed) {
+          // A completed conversational reply is not proof that an uncertain write was reconciled.
+          const prior = await deps.recovery?.get(where.key);
+          if (!prior?.pending.length) {
+            await deps.recovery?.clear(where.key);
+          }
+        }
       }
       if (replied && where) sessions.replied(where.key, message.user);
       await unreact(REACTIONS.working);
