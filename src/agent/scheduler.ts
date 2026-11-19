@@ -105,14 +105,7 @@ export class Scheduler {
 
   /** Start as many eligible messages as there are free slots. */
   pump(): void {
-    for (const id of this.finished) {
-      try {
-        this.queue.remove(id);
-        this.finished.delete(id);
-      } catch (err) {
-        this.reportQueueError(err, `remove finished message #${id}`);
-      }
-    }
+    this.removeFinished();
     while (!this.shutdown.signal.aborted && this.running.size < this.options.maxConcurrent) {
       let message: QueuedMessage | null;
       try {
@@ -124,21 +117,35 @@ export class Scheduler {
       if (!message) return;
       const controller = new AbortController();
       const signal = AbortSignal.any([this.shutdown.signal, controller.signal]);
-      const run = async (queued: QueuedMessage) => this.run(queued, signal);
-      const task = run(message)
-        .catch((err) => {
-          try {
-            this.options.onError?.(err, message);
-          } catch (reportError) {
-            this.reportQueueError(reportError, `report error for message #${message.id}`);
-          }
-        })
-        .finally(() => {
-          this.finished.add(message.id);
-          this.running.delete(message.id);
-          this.pump();
-        });
+      const task = this.runTurn(message, signal).finally(() => {
+        this.finished.add(message.id);
+        this.running.delete(message.id);
+        this.pump();
+      });
       this.running.set(message.id, { message, startedAt: this.now(), controller, task });
+    }
+  }
+
+  private async runTurn(message: QueuedMessage, signal: AbortSignal): Promise<void> {
+    try {
+      await this.run(message, signal);
+    } catch (err) {
+      try {
+        this.options.onError?.(err, message);
+      } catch (reportError) {
+        this.reportQueueError(reportError, `report error for message #${message.id}`);
+      }
+    }
+  }
+
+  private removeFinished(): void {
+    for (const id of this.finished) {
+      try {
+        this.queue.remove(id);
+        this.finished.delete(id);
+      } catch (err) {
+        this.reportQueueError(err, `remove finished message #${id}`);
+      }
     }
   }
 
@@ -166,5 +173,6 @@ export class Scheduler {
   async stop(): Promise<void> {
     this.shutdown.abort({ kind: "shutdown" } satisfies StopReason);
     await Promise.allSettled([...this.running.values()].map((t) => t.task));
+    this.removeFinished();
   }
 }

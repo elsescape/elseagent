@@ -122,6 +122,28 @@ describe("Scheduler", () => {
     await scheduler.stop();
   });
 
+  test("shutdown retries finished-row cleanup even when no turn is running", async () => {
+    const queue = new MessageQueue(openStateDb(":memory:"));
+    const remove = queue.remove.bind(queue);
+    const { run, finish, started } = controllableRunner();
+    const scheduler = new Scheduler(queue, run, {
+      maxConcurrent: 1,
+      maxQueue: 10,
+      onQueueError: () => {},
+    });
+    scheduler.submit(msg("A"));
+    queue.remove = () => {
+      throw new Error("remove unavailable");
+    };
+    await finish("A");
+    expect(scheduler.runningCount).toBe(0);
+
+    queue.remove = remove;
+    await scheduler.stop();
+    expect(queue.takeInterrupted()).toEqual([]);
+    expect(started).toEqual(["A"]);
+  });
+
   test("lists running turns and cancels one by conversation, with who did it", async () => {
     const queue = new MessageQueue(openStateDb(":memory:"));
     const reasons: unknown[] = [];
