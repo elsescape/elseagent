@@ -18,6 +18,8 @@ export interface Caller {
   user: string;
   channel: string;
   conversationKey: string;
+  /** ID of the incoming message, when the turn was prompted by a chat message. */
+  messageTs?: string;
 }
 
 export interface AdminDeps {

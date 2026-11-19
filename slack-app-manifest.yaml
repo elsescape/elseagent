@@ -44,6 +44,7 @@ oauth_config:
       - users:read # resolve user names
       - commands # the /new slash command
       - assistant:write # agent sessions: the "is working" status and the stop button
+      - search:read.public # search Slack messages in public channels
 settings:
   event_subscriptions:
     bot_events:

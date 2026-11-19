@@ -8,7 +8,7 @@ import { Admin, type Caller } from "../agent/admin.ts";
 import { Cleanup } from "../agent/cleanup.ts";
 import type { RunningTurn } from "../agent/scheduler.ts";
 import { ScheduleRunner } from "../agent/schedules.ts";
-import { registerSlackTools } from "../channels/slack/tools.ts";
+import { createSlackTools } from "../channels/slack/tools.ts";
 import {
   MessageQueue,
   openStateDb,
@@ -76,12 +76,63 @@ const admin = new Admin({
   defaultTimezone: "UTC",
 });
 
+const slackChannel = "C1234567890";
+const privateChannel = "C0987654321";
+const slackHistory = [
+  { ts: "2.0", text: "new", user: "U1", reply_count: 2 },
+  { ts: "1.0", text: "old", user: "U2" },
+];
+const slackRequests: { method: string; payload: object | undefined }[] = [];
+const registerSlackTools = createSlackTools(
+  {
+    conversations: {
+      list: async () => ({ ok: true, channels: [{ id: slackChannel, name: "ops" }] }),
+      info: async ({ channel }) => ({
+        ok: true,
+        channel: { is_channel: true, is_private: channel === privateChannel, is_member: true },
+      }),
+      history: async (payload) => {
+        slackRequests.push({ method: "history", payload });
+        return { ok: true, messages: slackHistory, response_metadata: { next_cursor: "older" } };
+      },
+      replies: async (payload) => {
+        slackRequests.push({ method: "replies", payload });
+        return { ok: true, messages: slackHistory.toReversed() };
+      },
+    },
+    apiCall: async (method, payload) => {
+      slackRequests.push({ method, payload });
+      return {
+        ok: true,
+        results: {
+          messages: [
+            {
+              channel_id: slackChannel,
+              message_ts: "2.0",
+              content: "Deploy succeeded",
+              permalink: "https://example.slack.com/archives/C1234567890/p20",
+            },
+          ],
+        },
+      };
+    },
+  },
+  (caller) => (caller.user === "U1" ? "test-action-token" : undefined),
+);
+
 let endpoint: McpEndpoint;
 beforeAll(() => {
   endpoint = startMcpServer(admin, callerFor, [registerSlackTools]);
 });
 
 function callerFor(id: number): Caller | null {
+  if (id === 3)
+    return {
+      user: "U3",
+      channel: privateChannel,
+      conversationKey: privateChannel,
+      messageTs: "1.0",
+    };
   const turn = turns.find((t) => t.message.id === id);
   return turn
     ? {
@@ -132,6 +183,9 @@ describe("elseagent MCP server", () => {
       "general_schedule_run_now",
       "general_status",
       "general_usage",
+      "slack_read_channel",
+      "slack_read_thread",
+      "slack_search",
       "slack_thread_follow",
     ]);
     await client.close();
@@ -153,6 +207,91 @@ describe("elseagent MCP server", () => {
       }
     } finally {
       await server.stop();
+    }
+  });
+
+  test("public channel history resolves a name and supplies a cursor", async () => {
+    const client = await connect(1);
+    try {
+      const history = (
+        await callTool(client, "slack_read_channel", {
+          channel: "#ops",
+          cursor: "page",
+          limit: 2,
+          hours: 6,
+        })
+      ).json();
+      expect(history).toMatchObject({
+        channel: slackChannel,
+        nextCursor: "older",
+        messages: [
+          { ts: "1.0", text: "old" },
+          { ts: "2.0", replyCount: 2 },
+        ],
+      });
+      expect(slackRequests.at(-1)).toMatchObject({
+        method: "history",
+        payload: { channel: slackChannel, cursor: "page", limit: 2, oldest: expect.any(String) },
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  test("private history and replies are denied outside that conversation", async () => {
+    const other = await connect(1);
+    const local = await connect(3);
+    try {
+      const count = slackRequests.length;
+      for (const name of ["slack_read_channel", "slack_read_thread"]) {
+        const args = name === "slack_read_thread" ? { thread_ts: "1.0" } : {};
+        const forbidden = await callTool(other, name, { ...args, channel: privateChannel });
+        expect(forbidden.isError).toBe(true);
+        expect(forbidden.text).toContain("only be read while answering");
+      }
+      expect(slackRequests).toHaveLength(count);
+
+      const thread = (await callTool(local, "slack_read_thread", { thread_ts: "1.0" })).json();
+      expect(thread).toMatchObject({
+        channel: privateChannel,
+        threadTs: "1.0",
+        messages: [{ ts: "1.0" }, { ts: "2.0" }],
+      });
+    } finally {
+      await Promise.all([other.close(), local.close()]);
+    }
+  });
+
+  test("search uses the caller's action token only for public messages", async () => {
+    const client = await connect(1);
+    const withoutToken = await connect(2);
+    try {
+      const found = (
+        await callTool(client, "slack_search", { query: "deploy", sort: "timestamp" })
+      ).json();
+      expect(found.messages[0]).toMatchObject({
+        channel: slackChannel,
+        ts: "2.0",
+        permalink: expect.any(String),
+      });
+      expect(found).not.toHaveProperty("action_token");
+      expect(slackRequests.at(-1)).toMatchObject({
+        method: "assistant.search.context",
+        payload: {
+          action_token: "test-action-token",
+          channel_types: "public_channel",
+          content_types: "messages",
+          query: "deploy",
+          sort: "timestamp",
+        },
+      });
+      const count = slackRequests.length;
+      expect((await callTool(withoutToken, "slack_search", { query: "deploy" })).isError).toBe(
+        true,
+      );
+      expect(slackRequests).toHaveLength(count);
+    } finally {
+      await Promise.all([client.close(), withoutToken.close()]);
     }
   });
 

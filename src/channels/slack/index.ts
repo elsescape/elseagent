@@ -11,6 +11,7 @@ import {
   type Reply,
   type ReplyTarget,
 } from "../types.ts";
+import { SlackActionTokens } from "./action-tokens.ts";
 import { ensureChannel, joinChannels } from "./channels.ts";
 import { CHOICE_ACTION, choiceBlocks, resolvedBlocks } from "./choices.ts";
 import { fetchThreadContext } from "./context.ts";
@@ -26,7 +27,7 @@ import {
   slashCommandMessage,
   stopButtonMessage,
 } from "./message.ts";
-import { registerSlackTools } from "./tools.ts";
+import { createSlackTools } from "./tools.ts";
 
 /** Slack's limit for `markdown_text` is 12,000 characters; stay under it. */
 export const SLACK_MARKDOWN_LIMIT = 11_000;
@@ -47,7 +48,6 @@ export interface SlackBot extends Channel {
   identity: SlackIdentity;
 }
 
-/** Telegram's channel IDs; everything else is Slack's. */
 /**
  * Prepare a Socket Mode connection. Verifies the bot token up front (auth.test) so bad
  * credentials fail at startup, and learns the bot's own identity for mention handling.
@@ -86,6 +86,7 @@ export async function createSlackBot(
     botId: auth.bot_id,
   });
   const { client } = app;
+  const actionTokens = new SlackActionTokens();
   // Slack sends Stop for the root message even when the turn belongs to the top-level DM.
   const topLevelDmSessions = new Map<string, string>();
 
@@ -177,7 +178,7 @@ export async function createSlackBot(
     platform: "slack",
     label: `slack @${identity.name} (${identity.userId})`,
     stateKey: `${identity.teamId}-${identity.userId}`,
-    registerMcpTools: registerSlackTools,
+    registerMcpTools: createSlackTools(client, (caller) => actionTokens.get(caller)),
     instructions: SLACK_INSTRUCTIONS,
     identity,
     // Slack keeps its existing bare IDs and names. Other adapters can use namespaced IDs.
@@ -197,15 +198,20 @@ export async function createSlackBot(
       const dispatch = (message: IncomingMessage) =>
         dispatchMessage("slack", onMessage, message, replyTo(message), logger);
       const dispatchOnce = deduplicateMessages(dispatch);
-      app.event("app_mention", async ({ event }) => {
+      const receive = async (message: IncomingMessage | null, event: object, body: object) => {
+        if (!message) return;
+        actionTokens.remember(message, event, body);
+        await dispatchOnce(message);
+      };
+      app.event("app_mention", async ({ event, body }) => {
         const message = fromMention(event, identity.userId);
-        if (message) await dispatchOnce(message);
+        await receive(message, event, body);
       });
-      app.message(async ({ message: event }) => {
+      app.message(async ({ message: event, body }) => {
         const message =
           fromDirectMessage(event, identity.userId) ??
           (config.threadReplies === "auto" ? fromThreadMessage(event, identity.userId) : null);
-        if (message) await dispatchOnce(message);
+        await receive(message, event, body);
       });
       // The stopped turn returns its Slack session to active during cleanup.
       app.event("agent_session_stopped", async ({ event }) => {

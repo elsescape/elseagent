@@ -92,6 +92,12 @@ For an existing app, sync the manifest's file scopes (`files:read`, `files:write
 Stop settings (`agent_view`, `assistant:write`, `agent_session_stopped`), then reinstall
 the app and refresh Slack. Switching from `assistant_view` to `agent_view` is irreversible.
 
+The Slack tools can read channel history and thread replies where the bot is a member.
+Private channels and DMs can only be read while answering a message there. To enable
+public message search, add `search:read.public` from the manifest and reinstall the app.
+Search uses the action token from a Slack DM or @mention, so it is unavailable on
+scheduled runs or after the token expires.
+
 ## Telegram
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and set
@@ -123,7 +129,8 @@ Telegram topic you can follow up in. A failed check produces a brief notificatio
   (`general_list_queue`, `general_remove_queued`, `general_list_sessions`, `general_forget_session`, `general_cancel_turn`), and `general_cleanup` for idle sessions and their files. Cleanup can preview
   what will be deleted and preserves usage records. Users who can talk to the agent can ask
   it to use these tools.
-- Slack exposes `slack_thread_follow` only when the Slack adapter is enabled. Telegram
+- The Slack adapter exposes `slack_thread_follow`, `slack_read_channel`,
+  `slack_read_thread` and `slack_search`. Telegram
   currently uses the shared `general_*` tools. Other integrations can register their own
   tool groups with a distinct prefix, such as `gmail_*` or `workspace_*`.
 

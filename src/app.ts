@@ -150,8 +150,8 @@ export async function startApp(
       (turnId) => {
         const turn = scheduler.runningTurns().find((t) => t.message.id === turnId);
         if (!turn) return null;
-        const { user, channel, conversationKey } = turn.message;
-        return { user, channel, conversationKey };
+        const { user, channel, conversationKey, ts } = turn.message;
+        return { user, channel, conversationKey, messageTs: ts || undefined };
       },
       toolGroups,
     );

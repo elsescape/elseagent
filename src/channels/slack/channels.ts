@@ -19,14 +19,18 @@ export interface ChannelsClient {
 
 const CHANNEL_ID = /^[CGD][A-Z0-9]{8,}$/;
 
+export const isSlackChannelId = (value: string) => CHANNEL_ID.test(value);
+
 /** Normalize a configured channel: IDs stay as-is, names lose a leading `#` and are lowercased. */
 export function parseChannelRef(ref: string): { id: string } | { name: string } {
   const trimmed = ref.trim();
-  if (CHANNEL_ID.test(trimmed)) return { id: trimmed };
+  if (isSlackChannelId(trimmed)) return { id: trimmed };
   return { name: trimmed.replace(/^#/, "").toLowerCase() };
 }
 
-async function listPublicChannels(client: ChannelsClient): Promise<Map<string, string>> {
+async function listPublicChannels(client: {
+  conversations: Pick<ChannelsClient["conversations"], "list">;
+}): Promise<Map<string, string>> {
   const byName = new Map<string, string>();
   let cursor: string | undefined;
   do {
@@ -76,19 +80,21 @@ export async function joinChannels(
   return joined;
 }
 
-/**
- * Make sure the bot can post in a channel and return its ID: public channels are joined,
- * private channels and DMs must already include the bot. Throws an Error explaining what to do.
- */
-export async function ensureChannel(client: ChannelsClient, ref: string): Promise<string> {
+/** Resolve a bare channel ID or a public channel name without joining it. */
+export async function resolveChannelId(
+  client: { conversations: Pick<ChannelsClient["conversations"], "list"> },
+  ref: string,
+): Promise<string> {
   const parsed = parseChannelRef(ref);
-  let id: string | undefined;
-  if ("id" in parsed) {
-    id = parsed.id;
-  } else {
-    id = (await listPublicChannels(client)).get(parsed.name);
-    if (!id) throw new Error(`Channel ${ref} not found (private channels need an /invite first)`);
-  }
+  if ("id" in parsed) return parsed.id;
+  const id = (await listPublicChannels(client)).get(parsed.name);
+  if (!id) throw new Error(`Channel ${ref} not found (private channels need an /invite first)`);
+  return id;
+}
+
+/** Join a public channel or verify the bot already belongs to the private channel or DM. */
+export async function ensureChannel(client: ChannelsClient, ref: string): Promise<string> {
+  const id = await resolveChannelId(client, ref);
   try {
     await client.conversations.join({ channel: id });
     return id;
