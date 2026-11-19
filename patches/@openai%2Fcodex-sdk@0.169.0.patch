@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 04492aee5c59991ef0d40b0752a62d4b93a21338..d8764a54e671b589809f931b8880035e4dfeef87 100644
+index 04492ae..27bc41c 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -141,7 +141,6 @@ function normalizeInput(input) {
@@ -10,14 +10,63 @@ index 04492aee5c59991ef0d40b0752a62d4b93a21338..d8764a54e671b589809f931b8880035e
  import { createRequire } from "module";
  var INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
  var TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
-@@ -293,14 +292,21 @@ var CodexExec = class {
-         });
-       }
-     );
+@@ -268,52 +267,62 @@ var CodexExec = class {
+       env,
+       signal: args.signal
+     });
+-    let spawnError = null;
+-    child.once("error", (err) => spawnError = err);
+-    if (!child.stdin) {
+-      child.kill();
+-      throw new Error("Child process has no stdin");
+-    }
+-    child.stdin.write(args.input);
+-    child.stdin.end();
+-    if (!child.stdout) {
+-      child.kill();
+-      throw new Error("Child process has no stdout");
+-    }
+-    const stderrChunks = [];
+-    if (child.stderr) {
+-      child.stderr.on("data", (data) => {
+-        stderrChunks.push(data);
++    let processError = null;
++    let pipeError = null;
++    const capturePipeError = (err) => pipeError ??= err;
++    child.on("error", (err) => processError ??= err);
++    child.stdin.on("error", capturePipeError);
++    child.stdout.on("error", capturePipeError);
++    child.stderr.on("error", capturePipeError);
++    let closed = false;
++    let killTimer;
++    const forceKillAfterGrace = () => {
++      if (closed || child.exitCode !== null || child.signalCode !== null || killTimer) return;
++      killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
++      killTimer.unref();
++    };
++    const exitPromise = new Promise((resolve) => {
++      child.once("close", (code, signal) => {
++        closed = true;
++        clearTimeout(killTimer);
++        args.signal?.removeEventListener("abort", forceKillAfterGrace);
++        resolve({ code, signal });
+       });
+-    }
+-    const exitPromise = new Promise(
+-      (resolve) => {
+-        child.once("exit", (code, signal) => {
+-          resolve({ code, signal });
+-        });
+-      }
+-    );
 -    const rl = readline.createInterface({
 -      input: child.stdout,
 -      crlfDelay: Infinity
--    });
+     });
++    args.signal?.addEventListener("abort", forceKillAfterGrace, { once: true });
++    if (args.signal?.aborted) forceKillAfterGrace();
++    const stderrChunks = [];
++    child.stderr.on("data", (data) => stderrChunks.push(data));
 +    // JSONL events are delimited by LF only. Bun readline also splits U+2028/U+2029,
 +    // which are valid, unescaped characters inside JSON strings (e.g. webpage text).
 +    const decoder = new TextDecoder();
@@ -25,6 +74,7 @@ index 04492aee5c59991ef0d40b0752a62d4b93a21338..d8764a54e671b589809f931b8880035e
      try {
 -      for await (const line of rl) {
 -        yield line;
++      child.stdin.end(args.input);
 +      for await (const chunk of child.stdout) {
 +        pending += decoder.decode(chunk, { stream: true });
 +        let newline;
@@ -33,17 +83,27 @@ index 04492aee5c59991ef0d40b0752a62d4b93a21338..d8764a54e671b589809f931b8880035e
 +          pending = pending.slice(newline + 1);
 +        }
        }
+-      if (spawnError) throw spawnError;
 +      pending += decoder.decode();
 +      if (pending) yield pending;
-       if (spawnError) throw spawnError;
++      if (processError) throw processError;
        const { code, signal } = await exitPromise;
        if (code !== 0 || signal) {
-@@ -309,7 +315,7 @@ var CodexExec = class {
+         const stderrBuffer = Buffer.concat(stderrChunks);
+         const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
          throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
        }
++      if (pipeError) throw pipeError;
      } finally {
 -      rl.close();
+-      child.removeAllListeners();
+-      try {
 +      child.stdout.destroy();
-       child.removeAllListeners();
-       try {
++      child.stdin.destroy();
++      if (!closed && child.exitCode === null && child.signalCode === null) {
          if (!child.killed) child.kill();
+-      } catch {
++        forceKillAfterGrace();
+       }
+     }
+   }

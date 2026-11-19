@@ -11,13 +11,17 @@ afterEach(async () => {
 });
 
 /** Real SDK/subprocess boundary, without invoking a model or external tools. */
-async function fakeCli(output: string, splitAt?: number, exitCode = 0) {
+async function scriptedCli(script: string) {
   const dir = await mkdtemp(join(tmpdir(), "elseagent-stream-"));
   dirs.push(dir);
   const path = join(dir, "codex");
-  await Bun.write(
-    path,
-    `#!/usr/bin/env bun
+  await Bun.write(path, `#!/usr/bin/env bun\n${script}`);
+  await chmod(path, 0o755);
+  return createCodex({ codexPath: path }).startThread();
+}
+
+function fakeCli(output: string, splitAt?: number, exitCode = 0) {
+  return scriptedCli(`
 for await (const _ of process.stdin) {}
 const bytes = Buffer.from(${JSON.stringify(output)});
 const split = ${splitAt ?? 0};
@@ -27,10 +31,7 @@ if (split) {
 }
 process.stdout.write(bytes.subarray(split));
 process.exitCode = ${exitCode};
-`,
-  );
-  await chmod(path, 0o755);
-  return createCodex({ codexPath: path }).startThread();
+`);
 }
 
 const completed = (text: string): ItemCompletedEvent => ({
@@ -100,4 +101,33 @@ describe("Codex event framing", () => {
       })(),
     ).rejects.toThrow("Codex Exec exited with code 7");
   });
+});
+
+describe("Codex subprocess isolation", () => {
+  test("an early exit while writing a large prompt fails only that turn", async () => {
+    const thread = await scriptedCli('console.error("startup failed"); process.exit(13);');
+    await expect(thread.run("x".repeat(2 * 1024 * 1024))).rejects.toThrow(
+      "Codex Exec exited with code 13: startup failed",
+    );
+
+    const next = await fakeCli(`${JSON.stringify(completed("next turn"))}\n`);
+    expect((await next.run("check")).items).toEqual([completed("next turn").item]);
+  });
+
+  test("kills a cancelled subprocess that ignores SIGTERM", async () => {
+    const thread = await scriptedCli(`
+process.on("SIGTERM", () => {});
+console.log(${JSON.stringify(JSON.stringify({ type: "thread.started", thread_id: "ready" }))});
+setInterval(() => {}, 1000);
+`);
+    const abort = new AbortController();
+    const { events } = await thread.runStreamed("check", { signal: abort.signal });
+    await expect(
+      (async () => {
+        for await (const event of events) {
+          if (event.type === "thread.started") abort.abort();
+        }
+      })(),
+    ).rejects.toThrow();
+  }, 10_000);
 });
