@@ -4,6 +4,7 @@ import { Command } from "commander";
 import pkg from "../package.json";
 import { startApp } from "./app.ts";
 import { CONFIG_TEMPLATE, DEFAULT_CONFIG_PATH, expandHome, loadConfig } from "./config/index.ts";
+import { registerService } from "./service.ts";
 
 export function buildProgram(): Command {
   const program = new Command()
@@ -42,5 +43,6 @@ export function buildProgram(): Command {
       console.log(`  elseagent run${isDefault ? "" : ` -c ${out}`}`);
     });
 
+  registerService(program);
   return program;
 }
