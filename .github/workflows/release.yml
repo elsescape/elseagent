@@ -1,0 +1,136 @@
+# Pushing a tag like v0.2.0 tests the code, builds the executables, publishes a GitHub
+# release with them, and points the Homebrew tap's formula at that release.
+#
+# Needs the repository secret HOMEBREW_TAP_TOKEN: a token that can push to the tap
+# (a fine-grained personal access token with "Contents: Read and write" on it).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: 1.4.4
+  TAP_REPOSITORY: elsescape/homebrew-tap
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun check
+      - run: bun test
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          # macOS executables are built on macOS, which signs them (ad hoc); an
+          # unsigned one does not start on Apple silicon.
+          - target: darwin-arm64
+            os: macos-latest
+            native: true
+          - target: darwin-x64
+            os: macos-latest
+          - target: linux-x64
+            os: ubuntu-24.04
+            native: true
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            native: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - name: Take the version from the tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          jq --arg v "$version" '.version = $v' package.json > package.json.new
+          mv package.json.new package.json
+      - name: Build
+        run: >
+          bun build src/index.ts --compile --minify --sourcemap
+          --target=bun-${{ matrix.target }} --outfile dist/elseagent
+      - name: Check that it starts
+        if: matrix.native
+        run: test "$(dist/elseagent --version)" = "$VERSION"
+      - name: Package
+        run: tar -C dist -czf "elseagent-$VERSION-${{ matrix.target }}.tar.gz" elseagent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elseagent-${{ matrix.target }}
+          path: elseagent-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: sha256sum elseagent-*.tar.gz > checksums.txt
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A tag with a hyphen (v1.0.0-rc.1) is a pre-release.
+        run: >
+          gh release create "$GITHUB_REF_NAME" elseagent-*.tar.gz checksums.txt
+          --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          ${{ contains(github.ref_name, '-') && '--prerelease' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: checksums.txt
+
+  homebrew:
+    needs: release
+    # Pre-releases are not offered through Homebrew.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Update the formula in the tap
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p tap/Formula
+          bash .github/scripts/homebrew-formula.sh "$version" checksums.txt > tap/Formula/elseagent.rb
+          cd tap
+          git add -- Formula/elseagent.rb
+          if git diff --cached --quiet; then
+            echo "The tap already has elseagent $version."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "elseagent $version"
+          git push origin HEAD

@@ -32,6 +32,17 @@ docker compose logs -f   # first time: open the link, enter the code to sign in 
 
 Then mention `@elseagent` in a channel, or send it a DM.
 
+**With Homebrew** on macOS or Linux:
+
+```bash
+brew install elsescape/tap/elseagent
+elseagent init
+```
+
+Install the Codex CLI separately, fill in the Slack or Telegram settings in
+`~/.elseagent.yaml`, then run `elseagent run`. Use `brew update && brew upgrade elseagent`
+to update an existing Homebrew installation.
+
 **On Kubernetes**: put the tokens in [`k8s/elseagent.yaml`](k8s/elseagent.yaml) (full image,
 32 GB disk, 4 GB memory), then `kubectl apply -f k8s/elseagent.yaml` and
 `kubectl logs -f elseagent-0` to sign in to Codex.
