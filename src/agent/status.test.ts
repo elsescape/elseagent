@@ -71,4 +71,22 @@ describe("StatusTicker", () => {
     t.set("late");
     expect(sent).toEqual([]);
   });
+
+  test("clears only after the in-flight status update finishes", async () => {
+    const update = Promise.withResolvers<void>();
+    const sent: string[] = [];
+    const t = new StatusTicker(
+      async (status) => {
+        if (status) await update.promise;
+        sent.push(status);
+      },
+      { minIntervalMs: 0 },
+    );
+    t.set("working");
+    t.set("next");
+    const stopped = t.stop();
+    update.resolve();
+    await stopped;
+    expect(sent).toEqual(["working", ""]);
+  });
 });

@@ -57,6 +57,7 @@ export class StatusTicker {
   private pending: ReturnType<typeof setTimeout> | undefined;
   private readonly refresh: ReturnType<typeof setInterval>;
   private stopped = false;
+  private sending: Promise<void> | undefined;
   private readonly minIntervalMs: number;
 
   constructor(
@@ -88,13 +89,23 @@ export class StatusTicker {
     this.stopped = true;
     clearInterval(this.refresh);
     clearTimeout(this.pending);
-    if (this.sent) await this.send("").catch(() => {});
+    if (this.sent) {
+      await this.sending;
+      await this.send("").catch(() => {});
+    }
   }
 
   private async flush(force = false): Promise<void> {
     if (this.stopped || !this.current || (!force && this.current === this.sent)) return;
     this.sent = this.current;
     this.lastSentAt = Date.now();
-    await this.send(this.current).catch(() => {});
+    const status = this.current;
+    const send = () => this.send(status).catch(() => {});
+    const sending = this.sending
+      ? this.sending.then(() => (this.stopped ? undefined : send()))
+      : send();
+    this.sending = sending;
+    await sending;
+    if (this.sending === sending) this.sending = undefined;
   }
 }

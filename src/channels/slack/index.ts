@@ -82,6 +82,8 @@ export async function createSlackBot(
     botId: auth.bot_id,
   });
   const { client } = app;
+  // Slack sends Stop for the root message even when the turn belongs to the top-level DM.
+  const topLevelDmSessions = new Map<string, string>();
 
   const replyTo = (target: ReplyTarget): Reply => ({
     async post(markdown, choices = [], files = []) {
@@ -145,10 +147,23 @@ export async function createSlackBot(
         .catch(() => {});
     },
     async setStatus(status) {
-      if (!target.threadTs) return;
-      await client.assistant.threads
-        .setStatus({ channel_id: target.channel, thread_ts: target.threadTs, status })
-        .catch(() => {});
+      const topLevelDm = !target.threadTs && target.channel.startsWith("D");
+      const threadTs = target.threadTs ?? (topLevelDm ? target.ts : undefined);
+      if (!threadTs) return;
+      if (topLevelDm && status) topLevelDmSessions.set(target.channel, threadTs);
+      try {
+        await client.apiCall("agents.sessions.setStatus", {
+          channel_id: target.channel,
+          thread_ts: threadTs,
+          status: status ? "processing" : "active",
+        });
+      } catch (err) {
+        logger.warn(`slack: could not set agent session status: ${(err as Error).message}`);
+      } finally {
+        if (topLevelDm && !status && topLevelDmSessions.get(target.channel) === threadTs) {
+          topLevelDmSessions.delete(target.channel);
+        }
+      }
     },
   });
 
@@ -193,12 +208,12 @@ export async function createSlackBot(
           (config.threadReplies === "auto" ? fromThreadMessage(event, identity.userId) : null);
         if (message) await dispatch(message);
       });
-      // Slack's stop button on "elseagent is working…" (needs the agent_session_stopped event).
-      // Our status is cleared when the stopped turn ends, which ends the processing state.
+      // The stopped turn returns its Slack session to active during cleanup.
       app.event("agent_session_stopped", async ({ event }) => {
-        await dispatch(stopButtonMessage(event));
-        // Leave "working" even if nothing was running (Slack doesn't on its own).
-        await replyTo({ channel: event.channel, ts: "", threadTs: event.thread_ts }).setStatus("");
+        if (!event.thread_ts) return;
+        const message = stopButtonMessage(event);
+        if (topLevelDmSessions.get(event.channel) === event.thread_ts) message.threadTs = undefined;
+        await dispatch(message);
       });
       // `/new` in a DM starts it over; it goes through the queue like a message (no ts: there
       // is no Slack message behind a slash command). Elsewhere, explain where it works.

@@ -45,7 +45,7 @@ cannot be undone). After changing any of this, reinstall the app and hard-refres
   includes the thread messages posted since the agent last looked (the whole thread for a new
   session).
 - Reactions on your message: ⏳ queued, 👀 working (removed when the reply is posted), ❌ failed.
-- While Codex works, the bottom of the thread shows what it is doing ("is running `bun test`…").
+- While Codex works, Slack shows the agent's native "is working" status and Stop button.
 - Attach files or images to your message (or post them in the thread before mentioning the
   agent): it reads them. It can attach files to its replies too.
 - To stop what the agent is doing, click the stop button on "is working" (or send `!stop` in the
