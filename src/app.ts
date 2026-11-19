@@ -10,10 +10,10 @@ import { createTurnRunner, REACTIONS } from "./agent/turn.ts";
 import { Channels } from "./channels/registry.ts";
 import { createSlackBot } from "./channels/slack/index.ts";
 import { createTelegramBot } from "./channels/telegram/index.ts";
-import type { Channel } from "./channels/types.ts";
 import { buildThreadOptions, createCodex, deleteCodexThread, resolveCodexPath } from "./codex.ts";
 import { codexAuthStatus, ensureCodexLogin } from "./codex-login.ts";
 import { type Config, ConfigError } from "./config/index.ts";
+import { runWithLifecycle } from "./lifecycle.ts";
 import { type McpEndpoint, startMcpServer } from "./mcp/server.ts";
 import {
   MessageQueue,
@@ -84,141 +84,142 @@ export async function startApp(
     return;
   }
 
-  // Without CODEX_API_KEY or a saved login, log a device code and wait for someone to sign in.
-  await ensureCodexLogin({ codexPath });
+  await runWithLifecycle(async ({ signal, defer }) => {
+    // Without CODEX_API_KEY or a saved login, log a device code and wait for someone to sign in.
+    await ensureCodexLogin({ codexPath, signal });
+    signal.throwIfAborted();
 
-  // Connect-time checks (tokens) for every configured channel, before anything starts.
-  const slack = config.channels.slack ? await createSlackBot(config.channels.slack) : undefined;
-  const telegram = config.channels.telegram
-    ? await createTelegramBot(config.channels.telegram)
-    : undefined;
-  const channels = new Channels([slack, telegram].filter((c) => c !== undefined));
-  // One database per agent, named after its bot, so several agents can share a state directory.
-  const dbName = slack
-    ? `${slack.identity.teamId}-${slack.identity.userId}`
-    : `telegram-${telegram?.identity.id}`;
-  const dbPath = join(stateDir, `${dbName}.sqlite`);
-  const db = openStateDb(dbPath);
-  const sessions = new SessionStore(db);
-  const queue = new MessageQueue(db);
-  const schedules = new ScheduleStore(db);
-  const usage = new UsageStore(db);
-  const sessionIdleMs = sessionIdleDays * DAY;
-  // Set once the MCP server is up (it needs the scheduler, which needs this to start turns).
-  let mcp: McpEndpoint | undefined;
+    // Connect-time checks (tokens) for every configured channel, before anything starts.
+    const slack = config.channels.slack ? await createSlackBot(config.channels.slack) : undefined;
+    signal.throwIfAborted();
+    const telegram = config.channels.telegram
+      ? await createTelegramBot(config.channels.telegram)
+      : undefined;
+    signal.throwIfAborted();
+    const channels = new Channels([slack, telegram].filter((c) => c !== undefined));
+    // One database per agent, named after its bot, so several agents can share a state directory.
+    const dbName = slack
+      ? `${slack.identity.teamId}-${slack.identity.userId}`
+      : `telegram-${telegram?.identity.id}`;
+    const dbPath = join(stateDir, `${dbName}.sqlite`);
+    const db = openStateDb(dbPath);
+    defer("state database", () => db.$client.close());
+    const sessions = new SessionStore(db);
+    const queue = new MessageQueue(db);
+    const schedules = new ScheduleStore(db);
+    const usage = new UsageStore(db);
+    const sessionIdleMs = sessionIdleDays * DAY;
+    // Set once the MCP server is up (it needs the scheduler, which needs this to start turns).
+    let mcp: McpEndpoint | undefined;
 
-  const scheduler = new Scheduler(
-    queue,
-    createTurnRunner({
-      codexFor: (message) =>
-        createCodex({
-          codexPath,
-          prompt,
-          channelInstructions: channels.for(message.channel).instructions,
-          mcp: mcp && { url: mcp.url, token: mcp.token, turnId: message.id },
-        }),
-      sessions,
-      recovery: new RecoveryStore(join(stateDir, "recovery")),
+    const scheduler = new Scheduler(
       queue,
-      threadOptions,
-      replyTo: channels.replyTo,
-      threadContext: channels.threadContext,
-      download: channels.download,
-      usage,
-      turnTimeoutMs: turnTimeoutMinutes * MINUTE,
-      sessionIdleMs,
-    }),
-    {
-      maxConcurrent,
-      maxQueue,
-      onError: (err, m) => console.warn(`turn for ${m.conversationKey} failed: ${err}`),
-    },
-  );
-
-  const scheduleRunner = new ScheduleRunner(schedules, scheduler);
-  const admin = new Admin({
-    scheduler,
-    queue,
-    sessions,
-    schedules,
-    scheduleRunner,
-    usage,
-    cleanup: new Cleanup({
-      sessions,
-      busyConversations: () => queue.conversations(),
-      deleteThread: (threadId) => deleteCodexThread(codexPath, threadId),
-      workspace,
-    }),
-    ensureChannel: channels.ensureChannel,
-    limits: { maxConcurrent, maxQueue, turnTimeoutMinutes, sessionIdleDays },
-    defaultTimezone: timezone,
-  });
-  // The elseagent tools, registered with every Codex turn (see buildCodexOptions).
-  mcp = startMcpServer(admin, (turnId) => {
-    const turn = scheduler.runningTurns().find((t) => t.message.id === turnId);
-    if (!turn) return null;
-    const { user, channel, conversationKey } = turn.message;
-    return { user, channel, conversationKey };
-  });
-
-  // Messages that were mid-turn when the previous process stopped.
-  for (const message of queue.takeInterrupted()) {
-    try {
-      const reply = channels.replyTo(message);
-      if (message.scheduleId !== null) {
-        await reply
-          .post(`A scheduled task (#${message.scheduleId}) was interrupted by a restart.`)
-          .catch(() => {});
-        continue;
-      }
-      await reply.unreact(REACTIONS.working);
-      await reply.react(REACTIONS.failed);
-      await reply
-        .post("The agent restarted while working on this. Send it again to retry.")
-        .catch(() => {});
-    } catch (err) {
-      console.warn(`could not report an interrupted turn: ${(err as Error).message}`);
-    }
-  }
-
-  const onMessage = createMessageHandler({ scheduler, sessions });
-
-  const started: Channel[] = [];
-  for (const channel of channels.all) {
-    await channel.start(onMessage);
-    started.push(channel);
-    console.log(`${channel.label}: connected`);
-  }
-  console.log(`state: ${dbPath}`);
-  scheduler.pump(); // pick up messages still queued from before a restart
-
-  const expireSessions = () => {
-    const removed = sessions.expire(sessionIdleMs);
-    if (removed) console.log(`sessions: forgot ${removed} idle conversation(s)`);
-  };
-  expireSessions();
-  const gc = setInterval(expireSessions, 60 * MINUTE);
-
-  // Queue scheduled tasks when they are due (also catches up once after a restart).
-  const runDueSchedules = () =>
-    scheduleRunner.tick((schedule, err) =>
-      console.warn(`schedule #${schedule.id} "${schedule.name}": ${(err as Error).message}`),
+      createTurnRunner({
+        codexFor: (message) =>
+          createCodex({
+            codexPath,
+            prompt,
+            channelInstructions: channels.for(message.channel).instructions,
+            mcp: mcp && { url: mcp.url, token: mcp.token, turnId: message.id },
+          }),
+        sessions,
+        recovery: new RecoveryStore(join(stateDir, "recovery")),
+        queue,
+        threadOptions,
+        replyTo: channels.replyTo,
+        threadContext: channels.threadContext,
+        download: channels.download,
+        usage,
+        turnTimeoutMs: turnTimeoutMinutes * MINUTE,
+        sessionIdleMs,
+      }),
+      {
+        maxConcurrent,
+        maxQueue,
+        onError: (err, m) => console.warn(`turn for ${m.conversationKey} failed: ${err}`),
+      },
     );
-  runDueSchedules();
-  const ticker = setInterval(runDueSchedules, 30_000);
 
-  const shutdown = async (signal: string) => {
-    console.log(`${signal} received, stopping`);
-    clearInterval(gc);
-    clearInterval(ticker);
-    await Promise.all(started.map((c) => c.stop())); // no new messages
-    await scheduler.stop(); // abort running turns; they tell their threads
-    await mcp?.stop();
-    db.$client.close();
-    process.exit(0);
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+    const scheduleRunner = new ScheduleRunner(schedules, scheduler);
+    const admin = new Admin({
+      scheduler,
+      queue,
+      sessions,
+      schedules,
+      scheduleRunner,
+      usage,
+      cleanup: new Cleanup({
+        sessions,
+        busyConversations: () => queue.conversations(),
+        deleteThread: (threadId) => deleteCodexThread(codexPath, threadId),
+        workspace,
+      }),
+      ensureChannel: channels.ensureChannel,
+      limits: { maxConcurrent, maxQueue, turnTimeoutMinutes, sessionIdleDays },
+      defaultTimezone: timezone,
+    });
+    // The elseagent tools, registered with every Codex turn (see buildCodexOptions).
+    mcp = startMcpServer(admin, (turnId) => {
+      const turn = scheduler.runningTurns().find((t) => t.message.id === turnId);
+      if (!turn) return null;
+      const { user, channel, conversationKey } = turn.message;
+      return { user, channel, conversationKey };
+    });
+
+    defer("MCP server", mcp.stop);
+    defer("scheduler", () => scheduler.stop());
+
+    // Messages that were mid-turn when the previous process stopped.
+    for (const message of queue.takeInterrupted()) {
+      try {
+        const reply = channels.replyTo(message);
+        if (message.scheduleId !== null) {
+          await reply
+            .post(`A scheduled task (#${message.scheduleId}) was interrupted by a restart.`)
+            .catch(() => {});
+          continue;
+        }
+        await reply.unreact(REACTIONS.working);
+        await reply.react(REACTIONS.failed);
+        await reply
+          .post("The agent restarted while working on this. Send it again to retry.")
+          .catch(() => {});
+      } catch (err) {
+        console.warn(`could not report an interrupted turn: ${(err as Error).message}`);
+      }
+    }
+
+    const onMessage = createMessageHandler({ scheduler, sessions });
+
+    for (const channel of channels.all) {
+      signal.throwIfAborted();
+      defer(channel.label, () => channel.stop());
+      await channel.start(async (message, reply) => {
+        if (!signal.aborted) await onMessage(message, reply);
+      });
+      signal.throwIfAborted();
+      console.log(`${channel.label}: connected`);
+    }
+    console.log(`state: ${dbPath}`);
+    scheduler.pump(); // pick up messages still queued from before a restart
+
+    const expireSessions = () => {
+      const removed = sessions.expire(sessionIdleMs);
+      if (removed) console.log(`sessions: forgot ${removed} idle conversation(s)`);
+    };
+    expireSessions();
+    const gc = setInterval(expireSessions, 60 * MINUTE);
+    defer("session expiry timer", () => clearInterval(gc));
+
+    // Queue scheduled tasks when they are due (also catches up once after a restart).
+    const runDueSchedules = () =>
+      scheduleRunner.tick((schedule, err) =>
+        console.warn(`schedule #${schedule.id} "${schedule.name}": ${(err as Error).message}`),
+      );
+    runDueSchedules();
+    const ticker = setInterval(runDueSchedules, 30_000);
+    defer("schedule timer", () => clearInterval(ticker));
+  });
 }
 
 /**

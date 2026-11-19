@@ -11,9 +11,14 @@ export type StateDb = BunSQLiteDatabase<typeof schema> & { $client: Database };
 export function openStateDb(path: string): StateDb {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const client = new Database(path, { create: true, strict: true });
-  client.exec("PRAGMA journal_mode = WAL");
-  client.exec("PRAGMA busy_timeout = 5000");
-  const db = drizzle({ client, schema });
-  runMigrations(db);
-  return db;
+  try {
+    client.exec("PRAGMA journal_mode = WAL");
+    client.exec("PRAGMA busy_timeout = 5000");
+    const db = drizzle({ client, schema });
+    runMigrations(db);
+    return db;
+  } catch (err) {
+    client.close();
+    throw err;
+  }
 }
