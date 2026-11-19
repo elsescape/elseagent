@@ -202,18 +202,18 @@ Agent state, read-only:
 
 Chat sessions, each a conversation with its own Codex session like a Slack thread:
 
-| Endpoint                          | Does                                                                 |
-| --------------------------------- | -------------------------------------------------------------------- |
-| `POST /api/sessions`              | Create a session; optional `title`                                   |
-| `GET /api/sessions`               | List sessions with `status` idle, queued or running                  |
-| `GET /api/sessions/:id`           | The session, its `history`, the `live` turn and a `cursor`           |
-| `PATCH /api/sessions/:id`         | Rename it (`title`)                                                  |
-| `DELETE /api/sessions/:id`        | Delete it; `409` while a turn is queued or running                   |
-| `POST /api/sessions/:id/files`    | Upload files for the next message (multipart, `file` fields)         |
+| Endpoint                          | Does                                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------------- |
+| `POST /api/sessions`              | Create a session; optional `title`                                                  |
+| `GET /api/sessions`               | List sessions with `status` idle, queued or running                                 |
+| `GET /api/sessions/:id`           | The session, its `history`, the `live` turn and a `cursor`                          |
+| `PATCH /api/sessions/:id`         | Rename it (`title`)                                                                 |
+| `DELETE /api/sessions/:id`        | Delete it; `409` while a turn is queued or running                                  |
+| `POST /api/sessions/:id/files`    | Upload files for the next message (multipart, `file` fields)                        |
 | `POST /api/sessions/:id/messages` | Send `text` and/or `files` (optional `user`); `202` with `messageId`, `429` if full |
-| `POST /api/sessions/:id/stop`     | Stop the running turn                                                |
-| `GET /api/sessions/:id/events`    | Stream the session's events (server-sent events)                     |
-| `GET /api/files?path=`            | Download a file from the workspace                                   |
+| `POST /api/sessions/:id/stop`     | Stop the running turn                                                               |
+| `GET /api/sessions/:id/events`    | Stream the session's events (server-sent events)                                    |
+| `GET /api/files?path=`            | Download a file from the workspace                                                  |
 
 ```bash
 curl -X POST localhost:2923/api/sessions
@@ -227,7 +227,7 @@ and a time `at`. A turn produces them in this order:
 
 | `type`         | Carries                                                                                                                                                                                                                   |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user_message` | `text`, `user`, `files`                                                                                                                                                                                                          |
+| `user_message` | `text`, `user`, `files`                                                                                                                                                                                                   |
 | `turn_started` |                                                                                                                                                                                                                           |
 | `codex`        | `event`, a Codex SDK event as it is: `item.started`, `item.updated` and `item.completed` with reasoning, commands and their output, file changes, MCP tool calls and web searches, then `turn.completed` with token usage |
 | `status`       | `text`, a one-line summary such as "is running `bun test`…"; empty clears it                                                                                                                                              |
