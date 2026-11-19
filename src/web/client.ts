@@ -26,9 +26,11 @@ export interface AgentStatus {
 
 /** The API wants a token, or the saved one is wrong. */
 export class Unauthorized extends Error {}
+/** The session is gone (deleted, or it was another agent's). */
+export class NotFound extends Error {}
 
 const TOKEN_KEY = "elseagent.token";
-export const savedToken = () => localStorage.getItem(TOKEN_KEY) ?? "";
+const savedToken = () => localStorage.getItem(TOKEN_KEY) ?? "";
 export const saveToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
 
 const headers = (): Record<string, string> => {
@@ -46,6 +48,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (res.status === 401) throw new Unauthorized();
+  if (res.status === 404) throw new NotFound();
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `${method} ${path} failed (${res.status})`);
@@ -64,11 +67,11 @@ export const api = {
   stop: (id: string) => request<unknown>("POST", `/sessions/${id}/stop`, {}),
 };
 
-const RETRY_MS = 1500;
-
 /**
- * Follow a session's events after `cursor` until `signal` aborts, reconnecting where the
- * stream stopped when the connection drops. (`EventSource` can't send the bearer token.)
+ * Deliver a session's events after `cursor` until the stream ends: `signal` aborted, or the
+ * connection dropped (the agent restarted, the network went). The caller then loads the
+ * session again, since a cursor does not outlive the agent's process.
+ * (`EventSource` can't send the bearer token, hence `fetch`.)
  */
 export async function followEvents(
   id: string,
@@ -76,33 +79,25 @@ export async function followEvents(
   onEvent: (event: LiveEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  let after = cursor;
-  while (!signal.aborted) {
-    try {
-      const res = await fetch(`/api/sessions/${id}/events?after=${encodeURIComponent(after)}`, {
-        headers: headers(),
-        signal,
-      });
-      if (res.status === 401 || res.status === 404 || !res.body) return;
-      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += value;
-        let split = buffer.indexOf("\n\n");
-        for (; split !== -1; split = buffer.indexOf("\n\n")) {
-          const block = buffer.slice(0, split);
-          buffer = buffer.slice(split + 2);
-          const data = /^data: (.*)$/m.exec(block)?.[1];
-          if (!data) continue; // a comment that keeps the connection open
-          after = /^id: (.*)$/m.exec(block)?.[1] ?? after;
-          onEvent(JSON.parse(data));
-        }
-      }
-    } catch {
-      // dropped; try again below
+  const res = await fetch(`/api/sessions/${id}/events?after=${encodeURIComponent(cursor)}`, {
+    headers: headers(),
+    signal,
+  });
+  if (res.status === 401) throw new Unauthorized();
+  if (res.status === 404) throw new NotFound();
+  if (!res.ok || !res.body) throw new Error(`the event stream failed (${res.status})`);
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += value;
+    let split = buffer.indexOf("\n\n");
+    for (; split !== -1; split = buffer.indexOf("\n\n")) {
+      const block = buffer.slice(0, split);
+      buffer = buffer.slice(split + 2);
+      const data = /^data: (.*)$/m.exec(block)?.[1];
+      if (data) onEvent(JSON.parse(data)); // anything else is a comment keeping the stream open
     }
-    if (!signal.aborted) await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
   }
 }

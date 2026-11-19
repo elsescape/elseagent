@@ -54,8 +54,8 @@ export function createApiChat({
   sessions: Pick<ApiSessionStore, "create" | "touch">;
   label?: string;
 }): ApiChat {
-  /** Messages whose turn reported a failure (the "failed" reaction). */
-  const failed = new Set<string>();
+  /** Messages whose turn is running, and whether it reported a failure (the "failed" reaction). */
+  const failed = new Map<string, boolean>();
 
   const replyTo = (target: ReplyTarget): Reply => {
     let sessionId = target.threadTs ?? null;
@@ -65,7 +65,8 @@ export function createApiChat({
         sessionId ??= sessions.create(titleFrom(markdown)).id;
         hub.publish(sessionId, target.ts, {
           type: "reply",
-          text: markdown,
+          // Elsewhere `<@id>` is a mention; here it would be read as an HTML tag and dropped.
+          text: markdown.replace(/<@([^>\s]+)>/g, "@$1"),
           choices,
           files: files.map(({ name, path }) => ({ name, path })),
         });
@@ -73,7 +74,7 @@ export function createApiChat({
         return sessionId;
       },
       async react(reaction) {
-        if (reaction === "failed" && target.ts) failed.add(target.ts);
+        if (reaction === "failed" && failed.has(target.ts)) failed.set(target.ts, true);
       },
       async unreact() {},
       async setStatus(text) {
@@ -110,10 +111,12 @@ export function createApiChat({
         hub.publish(sessionId, message.ts, { type: "user_message", text, user });
       }
       hub.publish(sessionId, message.ts, { type: "turn_started" });
+      failed.set(message.ts, false);
       try {
         await run(message, signal);
       } finally {
-        const reportedFailure = failed.delete(message.ts);
+        const reportedFailure = failed.get(message.ts) === true;
+        failed.delete(message.ts);
         hub.publish(sessionId, message.ts, {
           type: "turn_ended",
           status: stopReason(signal) ? "interrupted" : reportedFailure ? "failed" : "completed",

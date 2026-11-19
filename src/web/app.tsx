@@ -14,6 +14,7 @@ import {
   type AgentStatus,
   api,
   followEvents,
+  NotFound,
   type Session,
   saveToken,
   Unauthorized,
@@ -34,6 +35,7 @@ import { useTheme } from "./theme.ts";
 import { buildTimeline, groupSteps } from "./timeline.ts";
 
 const REFRESH_MS = 4000;
+const RECONNECT_MS = 1500;
 /** Closer to the bottom than this, the view follows new messages. */
 const FOLLOW_PX = 120;
 
@@ -154,7 +156,15 @@ function App() {
     return () => clearInterval(timer);
   }, [locked, refresh]);
 
-  // Show the session: what Codex remembers of it, then whatever happens from here on.
+  // The address names the session, so a link, the back button or an edited address opens it.
+  useEffect(() => {
+    const onHash = () => setActiveId(sessionFromUrl());
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Show the session: what Codex remembers of it, then whatever happens from here on. When
+  // the stream drops (the agent restarted, the network went) the session is loaded again.
   useEffect(() => {
     setEvents([]);
     setFollowing(true);
@@ -162,22 +172,32 @@ function App() {
     if (!activeId || locked) return;
     const stop = new AbortController();
     void (async () => {
-      const view = await attempt(() => api.session(activeId));
-      if (stop.signal.aborted) return;
-      if (!view) return setActiveId(null); // deleted, or another agent's
-      setEvents([...view.history, ...view.live]);
-      await followEvents(
-        activeId,
-        view.cursor,
-        (event) => {
-          setEvents((seen) => [...seen, event]);
-          if (event.type === "turn_ended" || event.type === "turn_started") void refresh();
-        },
-        stop.signal,
-      );
+      while (!stop.signal.aborted) {
+        try {
+          const view = await api.session(activeId);
+          if (stop.signal.aborted) return;
+          setError("");
+          setEvents([...view.history, ...view.live]);
+          await followEvents(
+            activeId,
+            view.cursor,
+            (event) => {
+              setEvents((seen) => [...seen, event]);
+              if (event.type === "turn_ended" || event.type === "turn_started") void refresh();
+            },
+            stop.signal,
+          );
+        } catch (err) {
+          if (stop.signal.aborted) return;
+          if (err instanceof Unauthorized) return setLocked(true);
+          if (err instanceof NotFound) return setActiveId(null);
+          setError("Lost the connection to the agent. Reconnecting…");
+        }
+        await new Promise((resolve) => setTimeout(resolve, RECONNECT_MS));
+      }
     })();
     return () => stop.abort();
-  }, [activeId, locked, attempt, refresh]);
+  }, [activeId, locked, refresh]);
 
   const timeline = useMemo(() => buildTimeline(events), [events]);
   const blocks = useMemo(() => groupSteps(timeline.entries, timeline.busy), [timeline]);

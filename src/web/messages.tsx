@@ -20,6 +20,13 @@ import { Button } from "./components/ui/button.tsx";
 import { cn } from "./lib/utils.ts";
 import { type Block, summarizeSteps } from "./timeline.ts";
 
+// Links in what the agent wrote open in a new tab, and can't reach back into this one.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName !== "A") return;
+  node.setAttribute("target", "_blank");
+  node.setAttribute("rel", "noopener noreferrer");
+});
+
 /** Markdown from the agent as HTML that is safe to insert. */
 const renderMarkdown = (text: string) =>
   DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }));

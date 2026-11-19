@@ -16,6 +16,8 @@ import { type HistoryOptions, threadHistory } from "./history.ts";
 /** Who a message is from when the client doesn't say. */
 export const DEFAULT_USER = "web";
 const MAX_MESSAGE_CHARS = 100_000;
+/** Room for the longest message in any encoding; nothing else is sent to the API. */
+const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_TITLE_CHARS = 200;
 const PING_MS = 15_000;
 
@@ -135,13 +137,17 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
   const guard =
     <P extends string>(handler: Handler<P>): Handler<P> =>
     async (req, server) => {
-      // A browser page from another site may not drive the agent, token or not.
-      const origin = req.headers.get("origin");
-      if (origin && URL.parse(origin)?.host !== req.headers.get("host")) {
-        return error(403, "cross-origin requests are not allowed");
-      }
-      if (token && !sameSecret(req.headers.get("authorization") ?? "", `Bearer ${token}`)) {
-        return error(401, "missing or wrong bearer token");
+      if (token) {
+        if (!sameSecret(req.headers.get("authorization") ?? "", `Bearer ${token}`)) {
+          return error(401, "missing or wrong bearer token");
+        }
+      } else {
+        // Nothing else stops a page of another site, open in a browser on this machine, from
+        // driving the agent. (With a token it can't: it doesn't have it.)
+        const origin = req.headers.get("origin");
+        if (origin && URL.parse(origin)?.host !== req.headers.get("host")) {
+          return error(403, "cross-origin requests are not allowed");
+        }
       }
       try {
         return await handler(req, server);
@@ -176,6 +182,7 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
     port: deps.port,
     // Bundle the web chat once, minified, the way the compiled binary embeds it.
     development: false,
+    maxRequestBodySize: MAX_BODY_BYTES,
     routes: {
       // The page is public; everything it loads goes through the API and its token.
       "/": deps.webui ? webui : false,
@@ -253,7 +260,7 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
           const cursor = hub.cursor;
           const live = hub.live(session.id);
           // The turn in progress is in `live`; keep whatever Codex has written of it out.
-          const before = live.find((e) => e.type === "turn_started")?.at ?? now();
+          const before = hub.runningSince(session.id) ?? now();
           const threads = sessions.threadsOf(apiConversationKey(session.id));
           return json({
             session: describe(session),

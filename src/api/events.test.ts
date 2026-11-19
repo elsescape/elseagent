@@ -24,6 +24,23 @@ describe("EventHub", () => {
     expect(hub.live("other")).toEqual([]);
   });
 
+  test("knows when the running turn started, whatever is still buffered", () => {
+    let now = 100;
+    const hub = new EventHub({ maxEvents: 2, now: () => now });
+    expect(hub.runningSince("s")).toBeUndefined();
+    hub.publish("s", "m1", { type: "user_message", text: "one", user: "web" });
+    expect(hub.runningSince("s")).toBeUndefined(); // queued, not running
+    now = 200;
+    hub.publish("s", "m1", { type: "turn_started" });
+    hub.publish("s", "m2", { type: "user_message", text: "two", user: "web" });
+    now = 300;
+    for (const text of ["a", "b", "c"]) hub.publish("s", "m1", { type: "status", text });
+    expect(hub.live("s").some((e) => e.type === "turn_started")).toBe(false); // trimmed away
+    expect(hub.runningSince("s")).toBe(200);
+    end(hub, "s", "m1");
+    expect(hub.runningSince("s")).toBeUndefined();
+  });
+
   test("a subscriber gets the turns in progress, then what follows", () => {
     const hub = new EventHub();
     turn(hub, "s", "m1");

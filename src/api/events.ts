@@ -37,8 +37,8 @@ export type LiveEvent = SessionEvent & { seq: number };
 
 interface Stream {
   events: LiveEvent[];
-  /** Messages whose turn has not ended (queued or running). */
-  open: Set<string>;
+  /** Messages whose turn has not ended, and when it started (null while queued). */
+  open: Map<string, number | null>;
   listeners: Set<(event: LiveEvent) => void>;
   /** Unix epoch ms since nothing was open; null while a turn is. */
   idleSince: number | null;
@@ -79,13 +79,16 @@ export class EventHub {
   publish(sessionId: string, messageId: string, body: SessionEventBody): LiveEvent {
     this.sweep();
     const stream = this.stream(sessionId);
-    if (body.type === "user_message" || body.type === "turn_started") {
+    const event: LiveEvent = { ...body, messageId, at: this.now(), seq: ++this.seq };
+    if (body.type === "user_message") {
       // Earlier turns are in Codex's history by now.
-      if (stream.open.size === 0 && body.type === "user_message") stream.events = [];
-      stream.open.add(messageId);
+      if (stream.open.size === 0) stream.events = [];
+      if (!stream.open.has(messageId)) stream.open.set(messageId, null);
+      stream.idleSince = null;
+    } else if (body.type === "turn_started") {
+      stream.open.set(messageId, event.at);
       stream.idleSince = null;
     }
-    const event: LiveEvent = { ...body, messageId, at: this.now(), seq: ++this.seq };
     stream.events.push(event);
     if (stream.events.length > this.maxEvents) {
       stream.events.splice(0, stream.events.length - this.maxEvents);
@@ -101,6 +104,17 @@ export class EventHub {
   /** Whether a message's turn has been announced and has not ended. */
   has(sessionId: string, messageId: string): boolean {
     return this.streams.get(sessionId)?.open.has(messageId) ?? false;
+  }
+
+  /**
+   * When the session's running turn started (Unix epoch ms); undefined when none is running.
+   * Whatever Codex recorded from then on belongs to the live events, not to history.
+   */
+  runningSince(sessionId: string): number | undefined {
+    const started = [...(this.streams.get(sessionId)?.open.values() ?? [])].filter(
+      (at) => at !== null,
+    );
+    return started.length ? Math.min(...started) : undefined;
   }
 
   /** The events of the session's turns that have not ended. */
@@ -144,7 +158,7 @@ export class EventHub {
   private stream(sessionId: string): Stream {
     let stream = this.streams.get(sessionId);
     if (!stream) {
-      stream = { events: [], open: new Set(), listeners: new Set(), idleSince: this.now() };
+      stream = { events: [], open: new Map(), listeners: new Set(), idleSince: this.now() };
       this.streams.set(sessionId, stream);
     }
     return stream;

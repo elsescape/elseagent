@@ -182,9 +182,10 @@ Set `api.webui: false` to serve the API alone.
 ## HTTP API
 
 `elseagent run` serves an API under `http://127.0.0.1:2923/api` for dashboards and chat UIs.
-With `api.token` set, every request sends `Authorization: Bearer <token>`. Requests from a
-browser page on another origin are refused, so a UI on a different host or port needs a
-proxy. Bodies and responses are JSON, and errors are `{ "error": "..." }`.
+With `api.token` set, every request sends `Authorization: Bearer <token>`. The API sends no
+CORS headers, so a browser UI on a different host or port needs a proxy; without a token,
+requests from another origin are refused outright. Bodies and responses are JSON, and
+errors are `{ "error": "..." }`.
 
 Agent state, read-only:
 

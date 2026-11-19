@@ -206,6 +206,16 @@ describe("access", () => {
     expect(await wrong.json()).toEqual({ error: "missing or wrong bearer token" });
     expect((await fetch(`${base}/sessions/x/events`)).status).toBe(401);
     expect((await call("GET", "/status")).status).toBe(200);
+    // Behind a proxy the page's origin is not the host we see; the token is what counts.
+    const proxied = await call("POST", "/sessions", {}, { origin: "https://agent.example" });
+    expect(proxied.status).toBe(201);
+  });
+
+  test("a body larger than any message is refused", async () => {
+    const { call, post } = setup();
+    const { id } = await post("/sessions");
+    const huge = await call("POST", `/sessions/${id}/messages`, { text: "x".repeat(2_000_000) });
+    expect(huge.status).toBe(413);
   });
 
   test("without a token, local requests are let in but other sites' pages are not", async () => {
@@ -472,6 +482,11 @@ describe("the API channel", () => {
     const reply = chat.channel.replyTo({ channel: "api:chat", ts: "", startsThread: true });
     const id = await reply.post("⏰ **Nightly check**\n\nAll green.");
     expect(await reply.post("More details.")).toBe(id);
+    // A mention is written for people: as a tag, the page would drop it.
+    const seen: LiveEvent[] = [];
+    hub.subscribe(id ?? "", `${hub.epoch}:0`, (e) => seen.push(e));
+    await reply.post("Stopped by <@ada>.");
+    expect(seen.at(-1)).toMatchObject({ type: "reply", text: "Stopped by @ada." });
     const sessions = await get("/sessions");
     expect(sessions).toMatchObject([{ id, title: "⏰ Nightly check", status: "idle" }]);
   });
