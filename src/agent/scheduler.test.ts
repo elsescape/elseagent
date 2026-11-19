@@ -91,6 +91,37 @@ describe("Scheduler", () => {
     expect(queue.claimNext()).toBeNull();
   });
 
+  test("retries failed cleanup and polling without re-running the finished turn", async () => {
+    const queue = new MessageQueue(openStateDb(":memory:"));
+    const remove = queue.remove.bind(queue);
+    const claim = queue.claimNext.bind(queue);
+    const errors: string[] = [];
+    const { run, started, finish } = controllableRunner();
+    const scheduler = new Scheduler(queue, run, {
+      maxConcurrent: 1,
+      maxQueue: 10,
+      onQueueError: (_, operation) => errors.push(operation),
+    });
+    scheduler.submit(msg("A", "a1"));
+    scheduler.submit(msg("A", "a2"));
+    queue.remove = () => {
+      throw new Error("remove unavailable");
+    };
+    queue.claimNext = () => {
+      throw new Error("claim unavailable");
+    };
+    await finish("a1");
+    expect(scheduler.runningCount).toBe(0);
+    expect(errors).toEqual(["remove finished message #1", "claim next message"]);
+    expect(queue.listPending().map((m) => m.text)).toEqual(["a2"]);
+
+    queue.remove = remove;
+    queue.claimNext = claim;
+    scheduler.pump();
+    expect(started).toEqual(["a1", "a2"]);
+    await scheduler.stop();
+  });
+
   test("lists running turns and cancels one by conversation, with who did it", async () => {
     const queue = new MessageQueue(openStateDb(":memory:"));
     const reasons: unknown[] = [];

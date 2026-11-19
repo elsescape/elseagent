@@ -52,7 +52,7 @@ with every Codex turn, so the agent can inspect and manage itself when asked:
 - `status`, `list_queue`, `list_sessions`: running turns, queued messages, sessions, limits.
 - `cancel_turn`, `remove_queued`, `forget_session`: stop a running turn (its conversation is told
   who stopped it), drop a queued message, or start a conversation over.
-- `schedule_create`, `schedule_list`, `schedule_delete`, `schedule_run_now`: recurring tasks.
+- `schedule_create`, `schedule_list`, `schedule_delete`, `schedule_run_now`: one-time and recurring tasks.
 - `usage`: Codex token usage over a period (default the last 7 days), by day, user, channel,
   conversation or schedule. Ask "how many tokens did we use this week, per person?".
 - `cleanup`: for conversations idle more than 30 days (or as asked), delete their sessions, the
@@ -60,13 +60,16 @@ with every Codex turn, so the agent can inspect and manage itself when asked:
   first (a dry run) and asks before deleting. A cleaned-up conversation that becomes active again
   starts a new Codex session that reads the thread again. Usage records are kept.
 
-Ask in plain words, e.g. "every weekday at 9am, check the CI dashboard and post a summary in
-#ops". Each run announces that it is starting in a new conversation (a Slack message or Telegram
-topic), then runs a new Codex session and posts the result in that thread. Failures produce a brief
-notification; internal error details stay in the logs. Reply there to recover the same session.
-Schedules use `timezone` unless they
-set their own, run at most every 5 minutes, and are limited to 50 per agent. A run missed while
-the agent was down happens once after it restarts.
+Ask in plain words, e.g. "check every 10 minutes and alert me only if there is an error".
+When the check succeeds and finds no errors, it posts nothing. When it finds an error,
+it posts the alert as a new Slack message or Telegram topic. A failure to run the check
+produces a brief notification. Reply to a posted result to continue its Codex session.
+For a one-time task, ask "remind me tomorrow at 3pm". The tool accepts either `at` as an ISO
+8601 timestamp with an explicit offset, or `cron` for a recurring task. Recurring tasks use the
+agent's `timezone` by default and run at most once every 5 minutes. Each agent can have up to
+50 active schedules. If the agent was down, each overdue schedule is picked up once after
+restart. If the queue is full, the occurrence is recorded as skipped in `schedule_list`.
+`schedule_run_now` queues a manual run and preserves the next automatic occurrence.
 
 Anyone who can talk to the agent can use these tools.
 

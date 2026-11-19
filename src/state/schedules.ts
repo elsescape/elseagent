@@ -1,11 +1,14 @@
-import { asc, count, eq, lte } from "drizzle-orm";
+import { and, asc, count, eq, isNotNull, lte } from "drizzle-orm";
 import type { StateDb } from "./db.ts";
 import { schedules } from "./schema.ts";
 
 export type Schedule = typeof schedules.$inferSelect;
-export type NewSchedule = Omit<typeof schedules.$inferInsert, "id" | "createdAt" | "lastRunAt">;
+export type NewSchedule = Omit<
+  typeof schedules.$inferInsert,
+  "id" | "createdAt" | "lastRunAt" | "lastSkippedAt"
+>;
 
-/** Recurring tasks. Computing run times (cron) is the caller's job; this only stores them. */
+/** Scheduled tasks. Computing run times (cron) is the caller's job; this only stores them. */
 export class ScheduleStore {
   constructor(
     private readonly db: StateDb,
@@ -29,7 +32,10 @@ export class ScheduleStore {
   }
 
   count(): number {
-    return this.db.select({ n: count() }).from(schedules).get()?.n ?? 0;
+    return (
+      this.db.select({ n: count() }).from(schedules).where(isNotNull(schedules.nextRunAt)).get()
+        ?.n ?? 0
+    );
   }
 
   delete(id: number): Schedule | null {
@@ -46,12 +52,23 @@ export class ScheduleStore {
       .all();
   }
 
-  /** Record that a run was queued now, and when the next one is. */
-  markRun(id: number, nextRunAt: number): void {
-    this.db
-      .update(schedules)
-      .set({ lastRunAt: this.now(), nextRunAt })
-      .where(eq(schedules.id, id))
-      .run();
+  /** Advance this occurrence and enqueue it in the same SQLite transaction. */
+  advanceDue(id: number, dueAt: number, nextRunAt: number | null, enqueue: () => boolean) {
+    return this.db.transaction(() => {
+      const updated = this.db
+        .update(schedules)
+        .set({ nextRunAt })
+        .where(and(eq(schedules.id, id), eq(schedules.nextRunAt, dueAt)))
+        .returning({ id: schedules.id })
+        .get();
+      if (!updated) return "stale";
+      const queued = enqueue();
+      this.db
+        .update(schedules)
+        .set(queued ? { lastRunAt: this.now() } : { lastSkippedAt: dueAt })
+        .where(eq(schedules.id, id))
+        .run();
+      return queued ? "queued" : "skipped";
+    });
   }
 }

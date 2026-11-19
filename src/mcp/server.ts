@@ -165,13 +165,17 @@ export function buildMcpServer(admin: Admin, caller: Caller): McpServer {
     "schedule_create",
     {
       description:
-        "Create a recurring task. Each run uses a new Codex session to do `prompt` and posts " +
+        "Create a recurring or one-time task. Provide exactly one of cron or at. Each run uses a new Codex session to do `prompt` and posts " +
         "its result or a brief error as a new message in `channel` (in Telegram, a new topic). " +
         "Runs may stay silent with reply: false. People can follow up to recover the session. Runs at most " +
         "every 5 minutes. Confirm the schedule (next run time) to the user afterwards.",
       inputSchema: {
         name: z.string().min(1).max(80).describe("Short name, e.g. 'Daily CI check'"),
-        cron: z.string().describe("Cron expression, 5 fields, e.g. '0 9 * * 1-5'"),
+        cron: z.string().optional().describe("Cron expression, 5 fields, e.g. '0 9 * * 1-5'"),
+        at: z
+          .string()
+          .optional()
+          .describe("One-time ISO 8601 date-time with offset or Z, e.g. 2026-11-20T15:00:00+08:00"),
         prompt: z.string().min(1).describe("What to do on each run, written as an instruction"),
         channel: z
           .string()
@@ -191,13 +195,16 @@ export function buildMcpServer(admin: Admin, caller: Caller): McpServer {
   );
   server.registerTool(
     "schedule_list",
-    { description: "All recurring tasks with their next run time.", annotations: readOnly },
+    {
+      description: "All scheduled tasks with their next run and most recent skipped occurrence.",
+      annotations: readOnly,
+    },
     () => call(() => admin.scheduleList()),
   );
   server.registerTool(
     "schedule_delete",
     {
-      description: "Delete a recurring task by id.",
+      description: "Delete a scheduled task by id.",
       inputSchema: { id: z.number().int() },
       annotations: { destructiveHint: true, openWorldHint: false },
     },
@@ -206,7 +213,7 @@ export function buildMcpServer(admin: Admin, caller: Caller): McpServer {
   server.registerTool(
     "schedule_run_now",
     {
-      description: "Run a recurring task once now (queued like any message), e.g. to try it out.",
+      description: "Queue a manual run now without changing the next automatic run.",
       inputSchema: { id: z.number().int() },
       annotations: { openWorldHint: false },
     },

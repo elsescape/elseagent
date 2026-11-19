@@ -212,10 +212,15 @@ export async function startApp(
     defer("session expiry timer", () => clearInterval(gc));
 
     // Queue scheduled tasks when they are due (also catches up once after a restart).
-    const runDueSchedules = () =>
-      scheduleRunner.tick((schedule, err) =>
-        console.warn(`schedule #${schedule.id} "${schedule.name}": ${(err as Error).message}`),
-      );
+    const runDueSchedules = () => {
+      try {
+        scheduleRunner.tick((schedule, err) =>
+          console.warn(`schedule #${schedule.id} "${schedule.name}": ${err}`),
+        );
+      } catch (err) {
+        console.warn(`could not check due schedules: ${err}`);
+      }
+    };
     runDueSchedules();
     const ticker = setInterval(runDueSchedules, 30_000);
     defer("schedule timer", () => clearInterval(ticker));

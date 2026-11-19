@@ -65,14 +65,14 @@ export const queue = sqliteTable(
   ],
 );
 
-/** Recurring tasks created by users through the agent ("check X every morning, post in #ops"). */
+/** Scheduled tasks created by users through the agent ("check X every morning, post in #ops"). */
 export const schedules = sqliteTable(
   "schedules",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     name: text("name").notNull(),
     /** Cron expression (5 or 6 fields), evaluated in `timezone`. */
-    cron: text("cron").notNull(),
+    cron: text("cron"),
     /** IANA time zone, e.g. Asia/Shanghai. */
     timezone: text("timezone").notNull(),
     /** Slack channel ID the results are posted to. */
@@ -82,8 +82,9 @@ export const schedules = sqliteTable(
     createdBy: text("created_by").notNull(),
     /** Unix epoch milliseconds. */
     createdAt: integer("created_at").notNull(),
-    nextRunAt: integer("next_run_at").notNull(),
+    nextRunAt: integer("next_run_at"),
     lastRunAt: integer("last_run_at"),
+    lastSkippedAt: integer("last_skipped_at"),
   },
   (t) => [index("schedules_next_run").on(t.nextRunAt)],
 );

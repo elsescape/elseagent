@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { openStateDb } from "./db.ts";
@@ -8,6 +9,29 @@ import { SessionStore } from "./sessions.ts";
 const DAY = 24 * 60 * 60 * 1000;
 
 describe("migrations", () => {
+  test("preserves old cron tasks and deleted schedule IDs when adding one-time tasks", () => {
+    using db = new Database(":memory:", { strict: true });
+    for (const migration of EMBEDDED_MIGRATIONS.slice(0, 6)) {
+      for (const sql of migration.sql) db.exec(sql);
+    }
+    db.exec(`
+      INSERT INTO schedules (id, name, cron, timezone, channel, prompt, created_by, created_at,
+        next_run_at, last_run_at)
+      VALUES (2, 'Daily', '0 9 * * *', 'UTC', 'C1', 'Check CI', 'U1', 1, 3, 2),
+        (10, 'Deleted', '0 9 * * *', 'UTC', 'C1', 'Check CI', 'U1', 1, 3, NULL);
+      DELETE FROM schedules WHERE id = 10;
+    `);
+    for (const sql of EMBEDDED_MIGRATIONS[6]?.sql ?? []) db.exec(sql);
+    expect(
+      db.query("SELECT id, cron, next_run_at, last_run_at, last_skipped_at FROM schedules").all(),
+    ).toEqual([
+      { id: 2, cron: "0 9 * * *", next_run_at: 3, last_run_at: 2, last_skipped_at: null },
+    ]);
+    expect(db.query("SELECT seq FROM sqlite_sequence WHERE name = 'schedules'").get()).toEqual({
+      seq: 10,
+    });
+  });
+
   test("every migration in drizzle/ is embedded", async () => {
     const journal = (await Bun.file(
       join(import.meta.dir, "../../drizzle/meta/_journal.json"),

@@ -54,7 +54,11 @@ const admin = new Admin({
   queue,
   sessions,
   schedules,
-  scheduleRunner: new ScheduleRunner(schedules, { submit: () => ({ status: "started" }) }),
+  scheduleRunner: new ScheduleRunner(schedules, {
+    submit: () => ({ status: "started" }),
+    enqueue: () => null,
+    pump: () => {},
+  }),
   usage,
   cleanup: new Cleanup({
     sessions,
@@ -208,6 +212,22 @@ describe("elseagent MCP server", () => {
     expect((await callTool(client, "schedule_delete", { id: here.id })).text).toContain("Deleted");
     expect((await callTool(client, "schedule_list")).json()).toHaveLength(1);
     expect((await callTool(client, "schedule_run_now", { id: ops.id })).text).toContain("Queued");
+    await client.close();
+  });
+
+  test("schedule_create accepts a one-time timestamp over MCP", async () => {
+    const client = await connect(1);
+    const at = new Date(Date.now() + 60 * 60_000).toISOString();
+    const reminder = (
+      await callTool(client, "schedule_create", {
+        name: "Reminder",
+        at,
+        prompt: "Send a reminder",
+      })
+    ).json();
+    expect(reminder).toMatchObject({ name: "Reminder", cron: null, channel: "C1" });
+    expect(reminder.nextRun).toMatch(/\(UTC\)$/);
+    await callTool(client, "schedule_delete", { id: reminder.id });
     await client.close();
   });
 

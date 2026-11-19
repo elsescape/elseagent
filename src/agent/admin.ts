@@ -169,7 +169,14 @@ export class Admin {
   }
 
   async scheduleCreate(
-    input: { name: string; cron: string; prompt: string; channel?: string; timezone?: string },
+    input: {
+      name: string;
+      cron?: string;
+      at?: string;
+      prompt: string;
+      channel?: string;
+      timezone?: string;
+    },
     caller: Caller,
   ) {
     const timezone = input.timezone ?? this.deps.defaultTimezone;
@@ -180,6 +187,7 @@ export class Admin {
         this.deps.scheduleRunner.create({
           name: input.name,
           cron: input.cron,
+          at: input.at,
           timezone,
           channel,
           prompt: input.prompt,
@@ -220,7 +228,8 @@ export class Admin {
       channel: s.channel,
       prompt: s.prompt,
       createdBy: s.createdBy,
-      nextRun: formatTime(s.nextRunAt, s.timezone),
+      nextRun: s.nextRunAt === null ? null : formatTime(s.nextRunAt, s.timezone),
+      lastSkipped: s.lastSkippedAt === null ? null : formatTime(s.lastSkippedAt, s.timezone),
       lastRun: s.lastRunAt === null ? null : formatTime(s.lastRunAt, s.timezone),
     };
   }

@@ -29,6 +29,7 @@ export interface SchedulerOptions {
   maxConcurrent: number;
   maxQueue: number;
   onError?: (err: unknown, message: QueuedMessage) => void;
+  onQueueError?: (err: unknown, operation: string) => void;
   now?: () => number;
 }
 
@@ -49,6 +50,7 @@ interface Running extends RunningTurn {
  */
 export class Scheduler {
   private readonly running = new Map<number, Running>();
+  private readonly finished = new Set<number>();
   private readonly shutdown = new AbortController();
   private readonly now: () => number;
 
@@ -74,9 +76,9 @@ export class Scheduler {
    * message stops a passive turn running in its conversation, so it doesn't wait for it.
    */
   submit(message: NewQueuedMessage): SubmitResult {
-    if (this.shutdown.signal.aborted) return { status: "rejected" };
-    if (this.queue.pendingCount() >= this.options.maxQueue) return { status: "rejected" };
-    const { id } = this.queue.push(message);
+    const queued = this.enqueue(message);
+    if (!queued) return { status: "rejected" };
+    const { id } = queued;
     if (message.mode !== "passive") {
       for (const turn of this.running.values()) {
         if (
@@ -93,21 +95,59 @@ export class Scheduler {
       : { status: "queued", position: this.queue.position(id) };
   }
 
+  /** Persist a message without starting work, so scheduled runs can enqueue in a transaction. */
+  enqueue(message: NewQueuedMessage): QueuedMessage | null {
+    if (this.shutdown.signal.aborted || this.queue.pendingCount() >= this.options.maxQueue) {
+      return null;
+    }
+    return this.queue.push(message);
+  }
+
   /** Start as many eligible messages as there are free slots. */
   pump(): void {
+    for (const id of this.finished) {
+      try {
+        this.queue.remove(id);
+        this.finished.delete(id);
+      } catch (err) {
+        this.reportQueueError(err, `remove finished message #${id}`);
+      }
+    }
     while (!this.shutdown.signal.aborted && this.running.size < this.options.maxConcurrent) {
-      const message = this.queue.claimNext();
+      let message: QueuedMessage | null;
+      try {
+        message = this.queue.claimNext();
+      } catch (err) {
+        this.reportQueueError(err, "claim next message");
+        return;
+      }
       if (!message) return;
       const controller = new AbortController();
       const signal = AbortSignal.any([this.shutdown.signal, controller.signal]);
-      const task = this.run(message, signal)
-        .catch((err) => this.options.onError?.(err, message))
+      const run = async (queued: QueuedMessage) => this.run(queued, signal);
+      const task = run(message)
+        .catch((err) => {
+          try {
+            this.options.onError?.(err, message);
+          } catch (reportError) {
+            this.reportQueueError(reportError, `report error for message #${message.id}`);
+          }
+        })
         .finally(() => {
-          this.queue.remove(message.id);
+          this.finished.add(message.id);
           this.running.delete(message.id);
           this.pump();
         });
       this.running.set(message.id, { message, startedAt: this.now(), controller, task });
+    }
+  }
+
+  private reportQueueError(err: unknown, operation: string): void {
+    try {
+      if (this.options.onQueueError) this.options.onQueueError(err, operation);
+      else console.warn(`queue: could not ${operation}: ${err}`);
+    } catch (reportError) {
+      console.warn(`queue: could not report failure to ${operation}: ${reportError}`);
     }
   }
 

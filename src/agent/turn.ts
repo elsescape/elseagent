@@ -179,7 +179,7 @@ export function formatInput(
  *
  * A Slack message continues its conversation's Codex thread (or starts one) with the thread
  * messages it hasn't seen, and the reply goes into that thread. A scheduled run always starts a
- * new Codex thread and announces the run first; results and errors go in that announcement's
+ * new Codex thread; when it posts a result or an error, the message opens a
  * thread, where replies continue the run's session like any conversation.
  *
  * A passive message (a thread reply that doesn't mention the agent) is quiet: no reactions, no
