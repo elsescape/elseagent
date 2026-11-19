@@ -10,7 +10,7 @@ only at LF, preserving Unicode characters and chunk boundaries. CRLF is accepted
 by JSON.parse as trailing whitespace. Truly malformed events and nonzero process
 exits still fail visibly; the patch does not discard events or rerun writes.
 
-The patch also handles child-process pipe errors as turn failures. On cancellation, Codex
+The SDK starts the CLI with `codex exec --json`. The patch also handles child-process pipe errors as turn failures. On cancellation, Codex
 gets five seconds to exit before the SDK sends SIGKILL.
 
 Bun applies the patch on install, before the SDK is bundled into the executable.

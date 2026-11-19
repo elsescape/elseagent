@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 04492ae..27bc41c 100644
+index 04492ae..5324eaf 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -141,7 +141,6 @@ function normalizeInput(input) {
@@ -10,6 +10,15 @@ index 04492ae..27bc41c 100644
  import { createRequire } from "module";
  var INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
  var TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+@@ -175,7 +174,7 @@ var CodexExec = class {
+     this.rawConfigOverrides = rawConfigOverrides;
+   }
+   async *run(args) {
+-    const commandArgs = ["exec", "--experimental-json"];
++    const commandArgs = ["exec", "--json"];
+     if (this.configOverrides) {
+       for (const override of serializeConfigOverrides(this.configOverrides)) {
+         commandArgs.push("--config", override);
 @@ -268,52 +267,62 @@ var CodexExec = class {
        env,
        signal: args.signal

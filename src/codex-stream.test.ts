@@ -22,6 +22,10 @@ async function scriptedCli(script: string) {
 
 function fakeCli(output: string, splitAt?: number, exitCode = 0) {
   return scriptedCli(`
+if (process.argv[2] !== "exec" || process.argv[3] !== "--json") {
+  console.error("expected codex exec --json");
+  process.exit(2);
+}
 for await (const _ of process.stdin) {}
 const bytes = Buffer.from(${JSON.stringify(output)});
 const split = ${splitAt ?? 0};
