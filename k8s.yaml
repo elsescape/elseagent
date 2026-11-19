@@ -2,11 +2,11 @@
 #
 #   1. Put your Slack tokens in the `elseagent` Secret (the agent's config), and credentials
 #      for the tools it runs (GH_TOKEN…) in `elseagent-env` (environment variables).
-#   2. kubectl apply -f k8s/elseagent.yaml
+#   2. kubectl apply -f k8s.yaml
 #   3. kubectl logs -f elseagent-0   # first start: open the link, enter the code to sign in to Codex
 #
 # After changing a Secret: kubectl rollout restart statefulset/elseagent
-# Details: docs/docker.md#kubernetes. For another agent, copy this file and rename `elseagent`.
+# Details: README.md#kubernetes. For another agent, copy this file and rename `elseagent`.
 apiVersion: v1
 kind: Secret
 metadata:

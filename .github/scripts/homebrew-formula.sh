@@ -67,7 +67,7 @@ class Elseagent < Formula
       Run elseagent init, configure Slack or Telegram in ~/.elseagent/config.yml,
       then start the agent with elseagent run.
 
-      Setup: https://github.com/${repo}/blob/main/docs/usage.md
+      Setup: https://github.com/${repo}/blob/main/README.md#local-installation
     EOS
   end
 

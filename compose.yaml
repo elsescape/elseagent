@@ -1,4 +1,4 @@
-# elseagent with Docker Compose (details: docs/docker.md).
+# elseagent with Docker Compose (details: README.md#docker-compose).
 #
 #   1. config.yaml next to this file: the agent's config (Slack/Telegram tokens, prompt…).
 #   2. Optional: .env with credentials for the tools the agent runs (see .env.example).

@@ -206,39 +206,35 @@ describe("loadConfig", () => {
   });
 });
 
-describe("config.example.yaml", () => {
+describe(".config.example.yaml", () => {
   test("is the template written by `elseagent init`", async () => {
-    const example = await Bun.file(join(import.meta.dir, "../../config.example.yaml")).text();
+    const example = await Bun.file(join(import.meta.dir, "../../.config.example.yaml")).text();
     expect(CONFIG_TEMPLATE).toBe(example);
+    expect(example).toContain(DEFAULT_CONFIG_PATH);
   });
 
-  test("documents the default config path", () => {
-    expect(CONFIG_TEMPLATE).toContain(DEFAULT_CONFIG_PATH);
-  });
-
-  test("has no commented-out options or empty values, only real settings", () => {
-    const lines = CONFIG_TEMPLATE.split("\n").filter((l) => l.trim());
-    const firstSetting = lines.findIndex((l) => !l.startsWith("#"));
-    // Comments only in the header; every line after it is an active setting.
-    expect(lines.slice(firstSetting).some((l) => l.trim().startsWith("#"))).toBe(false);
-    expect(CONFIG_TEMPLATE).not.toMatch(/:\s*(""|''|~|null)\s*$/m);
-  });
-
-  test("contains only required settings, as placeholders", () => {
+  test("only enables Slack credentials by default", () => {
     expect(Bun.YAML.parse(CONFIG_TEMPLATE)).toEqual({
       channels: { slack: { botToken: `xoxb-${PLACEHOLDER}`, appToken: `xapp-${PLACEHOLDER}` } },
     });
   });
-});
 
-describe("docs/config.md", () => {
-  test("documents every option of every section", async () => {
-    const docs = await Bun.file(join(import.meta.dir, "../../docs/config.md")).text();
-    const missing = Object.entries(configSections).flatMap(([section, schema]) =>
-      Object.keys(schema.shape)
-        .map((key) => (section ? `${section}.${key}` : key))
-        .filter((option) => !docs.includes(`\`${option}\``)),
-    );
-    expect(missing).toEqual([]);
+  test("includes valid examples for every configurable field", async () => {
+    const fullExample = CONFIG_TEMPLATE.replace(/^( *)# ( *[a-zA-Z][a-zA-Z0-9]*:)/gm, "$1$2");
+    const example = Bun.YAML.parse(fullExample) as Record<string, unknown>;
+    const sections = {
+      "": example,
+      codex: example.codex,
+      "channels.slack": (example.channels as Record<string, unknown>).slack,
+      "channels.telegram": (example.channels as Record<string, unknown>).telegram,
+    };
+    for (const [section, schema] of Object.entries(configSections)) {
+      const sample = sections[section as keyof typeof sections] as Record<string, unknown>;
+      expect(Object.keys(sample)).toEqual(expect.arrayContaining(Object.keys(schema.shape)));
+    }
+    const path = await writeConfig("all-settings.yaml", fullExample.replaceAll(PLACEHOLDER, "123"));
+    const config = await loadConfig(path);
+    expect(config.channels.telegram?.allowedUsers).toEqual(["123456789"]);
+    expect(config.channels.slack?.join).toEqual(["ops"]);
   });
 });

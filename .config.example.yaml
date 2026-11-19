@@ -1,0 +1,43 @@
+# Default location for elseagent init and run is ~/.elseagent/config.yml.
+# Uncomment optional settings to override their defaults.
+# Configure Slack, Telegram, or both. Remove the Slack section for Telegram-only use.
+
+# Role and instructions appended to the agent's built-in instructions.
+# prompt: "You are the on-call assistant."
+
+# Relative paths are based on this config file.
+# workspace: ~/workspace
+# stateDir: ~/.elseagent
+# maxConcurrent: 32
+# maxQueue: 1024
+# turnTimeoutMinutes: 30
+# sessionIdleDays: 7
+
+# Defaults to the system time zone. Use an IANA name such as Asia/Shanghai.
+# timezone: Asia/Shanghai
+
+# codex:
+#   path: codex
+#   model: YOUR-MODEL
+#   reasoningEffort: high
+#   sandboxMode: workspace-write
+#   apiKey: sk-REPLACE-ME
+# Model and reasoning effort default to Codex's settings. Efforts are minimal,
+# low, medium, high, xhigh, max, ultra, and persistent.
+# Sandbox modes are workspace-write and danger-full-access. When left unset,
+# ELSEAGENT_SANDBOX_MODE takes precedence over the workspace-write default.
+# Omit apiKey to use CODEX_API_KEY, a saved login, or device-code login.
+
+channels:
+  slack:
+    botToken: xoxb-REPLACE-ME
+    appToken: xapp-REPLACE-ME
+    # Public channels to join by name or ID. Invite the bot to private channels.
+    # join: [ops]
+    # auto follows threads after a mention or result. mention requires a mention.
+    # threadReplies: auto
+
+  # Telegram handles private chats. Send /start to the bot to learn your user ID.
+  # telegram:
+  #   botToken: "123456789:REPLACE-ME"
+  #   allowedUsers: [123456789]

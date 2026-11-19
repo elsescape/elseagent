@@ -15,7 +15,7 @@ const REASONING_EFFORTS = [
   "persistent",
 ] as const satisfies readonly ModelReasoningEffort[];
 
-/** Marker used by config.example.yaml for values the user must fill in. */
+/** Marker used by .config.example.yaml for values the user must fill in. */
 export const PLACEHOLDER = "REPLACE-ME";
 
 const requiredString = (name: string) =>
@@ -153,7 +153,7 @@ export type SlackConfig = NonNullable<ChannelsConfig["slack"]>;
 export type TelegramConfig = NonNullable<ChannelsConfig["telegram"]>;
 export type CodexConfig = Config["codex"];
 
-/** Every config section; docs/config.md must document each of their fields. */
+/** Every config section; the example must include each field. */
 export const configSections = {
   "": agentSchema, // top level
   codex: codexSchema,
