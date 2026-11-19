@@ -30,6 +30,7 @@ import {
   topicOf,
 } from "./message.ts";
 import { CHOICE_PREFIX, createTelegramReplies, type TelegramClient } from "./reply.ts";
+import { createTelegramTools } from "./tools.ts";
 
 export interface TelegramIdentity {
   id: number;
@@ -212,6 +213,12 @@ export async function createTelegramBot(
     platform: "telegram",
     label: `telegram @${identity.username} (${identity.id})`,
     stateKey: `telegram-${identity.id}`,
+    registerMcpTools: createTelegramTools({
+      api,
+      allowed,
+      topicsEnabled: identity.topicsEnabled,
+      replyTo,
+    }),
     instructions: TELEGRAM_INSTRUCTIONS,
     identity,
     owns: (channel) => channel.startsWith(TELEGRAM_PREFIX),

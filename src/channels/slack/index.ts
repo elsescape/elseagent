@@ -178,7 +178,7 @@ export async function createSlackBot(
     platform: "slack",
     label: `slack @${identity.name} (${identity.userId})`,
     stateKey: `${identity.teamId}-${identity.userId}`,
-    registerMcpTools: createSlackTools(client, (caller) => actionTokens.get(caller)),
+    registerMcpTools: createSlackTools(client, (caller) => actionTokens.get(caller), replyTo),
     instructions: SLACK_INSTRUCTIONS,
     identity,
     // Slack keeps its existing bare IDs and names. Other adapters can use namespaced IDs.

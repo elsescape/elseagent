@@ -130,9 +130,13 @@ Telegram topic you can follow up in. A failed check produces a brief notificatio
   what will be deleted and preserves usage records. Users who can talk to the agent can ask
   it to use these tools.
 - The Slack adapter exposes `slack_thread_follow`, `slack_read_channel`,
-  `slack_read_thread` and `slack_search`. Telegram
-  currently uses the shared `general_*` tools. Other integrations can register their own
-  tool groups with a distinct prefix, such as `gmail_*` or `workspace_*`.
+  `slack_read_thread`, `slack_search` and `slack_post`. Use `slack_post` for a separate
+  message to a public channel the bot has joined, or to the current private conversation.
+  A scheduled task can use it to post to multiple destinations when asked.
+  In a Telegram private chat, `telegram_send`
+  sends text or workspace files to an existing topic and `telegram_rename_topic`
+  changes its title. These tools operate within the requesting user's chat.
+  Other integrations can register groups such as `gmail_*` or `workspace_*`.
 
 If Codex's event stream breaks, the runner can continue the saved session once within
 the original timeout when no operation is awaiting a result. When a command, MCP call,

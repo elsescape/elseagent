@@ -118,6 +118,12 @@ const registerSlackTools = createSlackTools(
     },
   },
   (caller) => (caller.user === "U1" ? "test-action-token" : undefined),
+  (target) => ({
+    post: async (text) => {
+      slackRequests.push({ method: "post", payload: { ...target, text } });
+      return "3.0";
+    },
+  }),
 );
 
 let endpoint: McpEndpoint;
@@ -126,6 +132,7 @@ beforeAll(() => {
 });
 
 function callerFor(id: number): Caller | null {
+  if (id === 4) return { user: "U1", channel: "C1", conversationKey: "schedule:1:42" };
   if (id === 3)
     return {
       user: "U3",
@@ -183,6 +190,7 @@ describe("elseagent MCP server", () => {
       "general_schedule_run_now",
       "general_status",
       "general_usage",
+      "slack_post",
       "slack_read_channel",
       "slack_read_thread",
       "slack_search",
@@ -207,6 +215,48 @@ describe("elseagent MCP server", () => {
       }
     } finally {
       await server.stop();
+    }
+  });
+
+  test("posts a new top-level message to the requested public Slack channel", async () => {
+    const client = await connect(1);
+    try {
+      const result = await callTool(client, "slack_post", {
+        channel: "#ops",
+        text: "Release is ready.",
+      });
+      expect(result.json()).toEqual({ channel: slackChannel, ts: "3.0" });
+      expect(slackRequests.at(-1)).toEqual({
+        method: "post",
+        payload: { channel: slackChannel, ts: "", text: "Release is ready." },
+      });
+
+      const count = slackRequests.length;
+      const blocked = await callTool(client, "slack_post", {
+        channel: privateChannel,
+        text: "Hello",
+      });
+      expect(blocked.isError).toBe(true);
+      expect(slackRequests).toHaveLength(count);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test("scheduled Slack tools can post a separate message without an originating message", async () => {
+    const client = await connect(4);
+    try {
+      const result = await callTool(client, "slack_post", {
+        channel: slackChannel,
+        text: "Scheduled alert",
+      });
+      expect(result.json()).toEqual({ channel: slackChannel, ts: "3.0" });
+      expect(slackRequests.at(-1)?.payload).toMatchObject({
+        channel: slackChannel,
+        text: "Scheduled alert",
+      });
+    } finally {
+      await client.close();
     }
   });
 

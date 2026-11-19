@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
+import { rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Admin, Caller } from "../../agent/admin.ts";
 import { ConfigError } from "../../config/index.ts";
+import { registerGeneralTools } from "../../mcp/general-tools.ts";
 import type { IncomingMessage } from "../types.ts";
 import { TelegramError, type TgUpdate } from "./api.ts";
 import { createTelegramBot } from "./index.ts";
@@ -269,6 +275,147 @@ describe("replies", () => {
     );
     return { ...fake, bot };
   };
+
+  const caller: Caller = {
+    user: "42",
+    channel: "tg:42",
+    conversationKey: "tg:42:3",
+    messageTs: "5",
+  };
+
+  async function withTools(
+    bot: Awaited<ReturnType<typeof createTelegramBot>>,
+    turn: Caller,
+    run: (client: Client) => Promise<void>,
+  ) {
+    const server = new McpServer({ name: "telegram-test", version: "1" });
+    const admin = {} as Admin; // These tests invoke Telegram tools only.
+    registerGeneralTools(server, admin, turn);
+    bot.registerMcpTools?.(server, admin, turn);
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "1" });
+    try {
+      await server.connect(serverSide);
+      await client.connect(clientSide);
+      await run(client);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  test("MCP sends to an existing topic and renames the current topic", async () => {
+    const { bot, sent } = await setup();
+    await withTools(bot, caller, async (client) => {
+      expect(
+        (await client.listTools()).tools
+          .map((tool) => tool.name)
+          .filter((name) => name.startsWith("telegram_"))
+          .sort(),
+      ).toEqual(["telegram_rename_topic", "telegram_send"]);
+      const delivery = await client.callTool({
+        name: "telegram_send",
+        arguments: {
+          topic_id: 9,
+          text: "Report is ready",
+        },
+      });
+      expect(delivery.isError).toBeFalsy();
+      const rename = await client.callTool({
+        name: "telegram_rename_topic",
+        arguments: {
+          name: "Release reports",
+        },
+      });
+      expect(rename.isError).toBeFalsy();
+    });
+    expect(sent("sendMessage")).toEqual([
+      expect.objectContaining({
+        chat_id: 42,
+        message_thread_id: 9,
+        text: "Report is ready",
+      }),
+    ]);
+    expect(sent("editForumTopic")).toEqual([
+      {
+        chat_id: 42,
+        message_thread_id: 3,
+        name: "Release reports",
+      },
+    ]);
+    expect(sent("createForumTopic")).toEqual([]);
+  });
+
+  test("MCP exposes write tools only to the owner of the active Telegram private chat", async () => {
+    const { bot } = await setup();
+    for (const turn of [
+      { ...caller, channel: "C1" },
+      { ...caller, user: "9" },
+      { ...caller, messageTs: undefined },
+      { ...caller, channel: "tg:9", user: "9" },
+    ]) {
+      await withTools(bot, turn, async (client) => {
+        expect(
+          (await client.listTools()).tools.some((tool) => tool.name.startsWith("telegram_")),
+        ).toBe(false);
+      });
+    }
+  });
+
+  test("MCP sends workspace files and rejects symlinks outside the workspace before sending", async () => {
+    const { bot, sent } = await setup();
+    const root = mkdtempSync(join(tmpdir(), "elseagent-tg-tool-"));
+    const workspace = join(root, "workspace");
+    try {
+      await Bun.write(join(workspace, "report.txt"), "report");
+      await Bun.write(join(root, "outside.txt"), "outside");
+      await symlink(join(root, "outside.txt"), join(workspace, "link.txt"));
+      await withTools(bot, { ...caller, workspace }, async (client) => {
+        const delivered = await client.callTool({
+          name: "telegram_send",
+          arguments: {
+            files: ["report.txt"],
+          },
+        });
+        expect(delivered.isError).toBeFalsy();
+        const denied = await client.callTool({
+          name: "telegram_send",
+          arguments: {
+            text: "should not send",
+            files: ["link.txt"],
+          },
+        });
+        expect(denied.isError).toBe(true);
+      });
+      expect(sent("sendMessage")).toEqual([]);
+      expect(sent("sendDocument")).toEqual([
+        { chat_id: 42, message_thread_id: 3, document: "report.txt" },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("MCP validates topics and still sends plain messages with threaded mode off", async () => {
+    const { bot, sent } = await setup({ topics: false });
+    await withTools(bot, { ...caller, conversationKey: caller.channel }, async (client) => {
+      const forbidden = await client.callTool({
+        name: "telegram_rename_topic",
+        arguments: {
+          topic_id: 9,
+          name: "Release",
+        },
+      });
+      expect(forbidden.isError).toBe(true);
+      const delivered = await client.callTool({
+        name: "telegram_send",
+        arguments: { text: "Hello" },
+      });
+      expect(delivered.isError).toBeFalsy();
+    });
+    expect(sent("editForumTopic")).toEqual([]);
+    expect(sent("sendMessage")[0]).toMatchObject({ chat_id: 42, text: "Hello" });
+  });
 
   test("sends files after the text: images as photos, the rest as documents", async () => {
     const dir = mkdtempSync(join(tmpdir(), "elseagent-tg-"));

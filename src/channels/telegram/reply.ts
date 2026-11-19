@@ -66,7 +66,7 @@ export function createTelegramReplies({
     }
   };
 
-  const replyTo = (target: ReplyTarget): Reply => {
+  const replyTo = (target: ReplyTarget, { strictFiles = false } = {}): Reply => {
     const chatId = chatIdOf(target.channel);
     if (chatId === null) throw new Error(`not a Telegram channel: ${target.channel}`);
     let threadId = target.threadTs ? Number(target.threadTs) : undefined;
@@ -99,14 +99,16 @@ export function createTelegramReplies({
           }
           if (isPhotoFile(file.name, size)) {
             // Telegram refuses some images as photos (odd dimensions): send those as files.
-            const sent = await api.upload("sendPhoto", params, "photo", file).then(
-              () => true,
-              () => false,
-            );
-            if (sent) continue;
+            try {
+              await api.upload("sendPhoto", params, "photo", file);
+              continue;
+            } catch (err) {
+              if (strictFiles && !(err instanceof TelegramError && err.code === 400)) throw err;
+            }
           }
           await api.upload("sendDocument", params, "document", file);
         } catch (err) {
+          if (strictFiles) throw err;
           logger.warn(`telegram: could not send ${file.name}: ${(err as Error).message}`);
           await sendHtml(
             chatId,

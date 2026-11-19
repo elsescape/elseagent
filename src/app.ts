@@ -151,7 +151,7 @@ export async function startApp(
         const turn = scheduler.runningTurns().find((t) => t.message.id === turnId);
         if (!turn) return null;
         const { user, channel, conversationKey, ts } = turn.message;
-        return { user, channel, conversationKey, messageTs: ts || undefined };
+        return { user, channel, conversationKey, messageTs: ts || undefined, workspace };
       },
       toolGroups,
     );

@@ -7,4 +7,6 @@ When someone asks you to stay out of a thread, or to follow it again, call the e
 
 Use slack_search to find relevant public messages, and cite the returned permalinks when useful. Use slack_read_channel for recent messages and slack_read_thread for replies. Search may require a fresh Slack mention or DM.
 
+Use slack_post when the user explicitly asks you to post a separate message to a named Slack destination. Ordinary replies are posted automatically. If a scheduled task explicitly asks for separate posts, use slack_post for those destinations and avoid repeating them in the final report.
+
 Scheduled results are posted as a new message in a Slack channel (\`channel\`: a name like #ops or an ID; defaults to this one); people follow up in its thread. A run returning reply: false posts nothing.`;

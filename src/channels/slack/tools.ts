@@ -3,13 +3,35 @@ import { z } from "zod";
 import { AdminError, type Caller } from "../../agent/admin.ts";
 import { callTool, type ToolGroup } from "../../mcp/tools.ts";
 import { truncate } from "../../util/text.ts";
+import type { Reply, ReplyTarget } from "../types.ts";
 import { isSlackChannelId, resolveChannelId } from "./channels.ts";
 
 export function createSlackTools(
   client: SlackToolsClient,
   actionTokenFor: (caller: Caller) => string | undefined,
+  replyTo: (target: ReplyTarget) => Pick<Reply, "post">,
 ): ToolGroup {
   return (server, admin, caller) => {
+    server.registerTool(
+      "slack_post",
+      {
+        description:
+          "Post a separate top-level Slack message when the user or scheduled task explicitly asks for a destination. " +
+          "Use a public channel the bot has joined, or the current Slack conversation for a private channel or DM. " +
+          "Ordinary replies and the default scheduled result are posted automatically.",
+        inputSchema: {
+          channel: slackChannelRef.describe("Destination channel ID or public #channel-name"),
+          text: z.string().trim().min(1).max(11_000).describe("Markdown message to post"),
+        },
+        annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      },
+      ({ channel, text }) =>
+        callTool(async () => {
+          const id = await resolveToolChannel(client, caller, channel, "post");
+          const ts = await replyTo({ channel: id, ts: "" }).post(text);
+          return { channel: id, ts };
+        }),
+    );
     server.registerTool(
       "slack_thread_follow",
       {
@@ -45,7 +67,7 @@ export function createSlackTools(
       },
       ({ channel, hours, limit, cursor }) =>
         callTool(async () => {
-          const id = await readableChannel(client, caller, channel);
+          const id = await resolveToolChannel(client, caller, channel, "read");
           const result = await client.conversations.history({
             channel: id,
             limit: limit ?? 20,
@@ -80,7 +102,7 @@ export function createSlackTools(
       },
       ({ channel, thread_ts, limit, cursor }) =>
         callTool(async () => {
-          const id = await readableChannel(client, caller, channel);
+          const id = await resolveToolChannel(client, caller, channel, "read");
           const result = await client.conversations.replies({
             channel: id,
             ts: thread_ts,
@@ -161,11 +183,8 @@ type SlackToolsClient = Pick<webApi.WebClient, "apiCall"> & {
   conversations: Pick<webApi.WebClient["conversations"], "list" | "info" | "history" | "replies">;
 };
 
-const channelRef = z
-  .string()
-  .trim()
-  .min(1)
-  .max(100)
+const slackChannelRef = z.string().trim().min(1).max(100);
+const channelRef = slackChannelRef
   .optional()
   .describe(
     "Slack channel ID or public #channel-name. Defaults to the current Slack conversation.",
@@ -180,7 +199,12 @@ const pageInput = {
     .describe("Opaque nextCursor from a previous result"),
 };
 const readOnly = { readOnlyHint: true, openWorldHint: true };
-async function readableChannel(client: SlackToolsClient, caller: Caller, ref?: string) {
+async function resolveToolChannel(
+  client: SlackToolsClient,
+  caller: Caller,
+  ref: string | undefined,
+  operation: "read" | "post",
+) {
   const target = ref ?? caller.channel;
   if (!isSlackChannelId(target) && !/^#?[a-z0-9_-]+$/i.test(target)) {
     throw new AdminError("Choose a Slack channel ID or a public #channel-name.");
@@ -189,19 +213,18 @@ async function readableChannel(client: SlackToolsClient, caller: Caller, ref?: s
     throw new AdminError("Use a Slack channel ID, rather than a user ID.");
   const channel = await resolveChannelId(client, target);
   if (channel === caller.channel && caller.messageTs) return channel;
-  if (channel.startsWith("D")) {
-    throw new AdminError(
-      "Private Slack conversations can only be read while answering a message there.",
-    );
-  }
-  const { channel: info } = await client.conversations.info({ channel });
+  const info = channel.startsWith("D")
+    ? undefined
+    : (await client.conversations.info({ channel })).channel;
   if (info?.is_channel !== true || info.is_private !== false || info.is_im || info.is_mpim) {
     throw new AdminError(
-      "Private Slack conversations can only be read while answering a message there.",
+      operation === "read"
+        ? "Private Slack conversations can only be read while answering a message there."
+        : "You can only post to a private Slack conversation while answering a message there.",
     );
   }
   if (info.is_member === false) {
-    throw new AdminError("Invite the Slack bot to that public channel before reading its history.");
+    throw new AdminError(`Invite the Slack bot to that public channel before using this tool.`);
   }
   return channel;
 }

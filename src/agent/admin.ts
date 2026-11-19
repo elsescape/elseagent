@@ -20,6 +20,8 @@ export interface Caller {
   conversationKey: string;
   /** ID of the incoming message, when the turn was prompted by a chat message. */
   messageTs?: string;
+  /** Working directory used when resolving files for a tool call. */
+  workspace?: string;
 }
 
 export interface AdminDeps {
