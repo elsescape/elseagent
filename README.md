@@ -2,11 +2,13 @@
 
 # elseagent
 
-A [Codex](https://github.com/openai/codex) agent for Slack and Telegram. Ask it to work
-in a thread or DM, share files, or run a task on a schedule.
+A [Codex](https://github.com/openai/codex) agent with a web chat and an HTTP API, and
+optionally in Slack and Telegram. Ask it to work in a session, thread or DM, share files,
+or run a task on a schedule.
 
 [Install](#local-installation) · [User service](#run-as-a-user-service) · [Configuration](#configuration) · [Slack](#slack) ·
-[Telegram](#telegram) · [Usage](#usage) · [Deployment](#deployment) · [Development](#development)
+[Telegram](#telegram) · [Usage](#usage) · [Web chat](#web-chat) · [HTTP API](#http-api) ·
+[Deployment](#deployment) · [Development](#development)
 
 ## Local installation
 
@@ -17,7 +19,9 @@ brew install elsescape/tap/elseagent
 elseagent init
 ```
 
-Fill in the channel credentials in `~/.elseagent/config.yml`, then run `elseagent run`.
+Run `elseagent run` and open the [web chat](#web-chat) at `http://127.0.0.1:2923/`. To use
+Slack or Telegram as well, uncomment `channels` in `~/.elseagent/config.yml` and fill in
+the credentials.
 Use `brew update && brew upgrade elseagent` to upgrade. Builds are also available from
 [GitHub Releases](https://github.com/elsescape/elseagent/releases).
 
@@ -55,9 +59,9 @@ Run `service install` again if those paths change.
 ## Configuration
 
 [.config.example.yaml](.config.example.yaml) lists every setting and doubles as the template
-for `elseagent init`. Fill in Slack, uncomment Telegram, or configure both. For Telegram
-alone, remove the Slack section. With no channel at all, the agent is reached through its
-[HTTP API](#http-api) only.
+for `elseagent init`. As generated, the agent is reached through its [web chat](#web-chat)
+and [HTTP API](#http-api) only. Slack and Telegram are optional: uncomment either
+section under `channels`, or both.
 
 - **Agent** · Set its instructions with `prompt`, its working directory with `workspace`
   (default `~/workspace`), and the time zone for schedules with `timezone` (default system
@@ -261,8 +265,9 @@ an `api.token` and publish port 2923.
 
 ### Docker Compose
 
-Copy `.config.example.yaml` to `config.yaml` next to [compose.yaml](compose.yaml) and fill
-in your channel settings. Optionally add tool credentials to `.env`.
+Copy `.config.example.yaml` to `config.yaml` next to [compose.yaml](compose.yaml). Uncomment
+and fill in the channels you use, or open the API as described above to use the web chat.
+Optionally add tool credentials to `.env`.
 
 ```bash
 docker compose up -d

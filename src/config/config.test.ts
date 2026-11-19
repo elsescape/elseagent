@@ -26,25 +26,31 @@ async function writeConfig(name: string, content: string): Promise<string> {
 }
 
 describe("loadConfig", () => {
-  test("loads the template once tokens are filled in", async () => {
-    const filled = CONFIG_TEMPLATE.replace("xoxb-REPLACE-ME", "xoxb-1").replace(
-      "xapp-REPLACE-ME",
-      "xapp-1",
-    );
-    const config = await loadConfig(await writeConfig("filled.yaml", filled));
-    expect(config.channels.slack).toEqual({
-      botToken: "xoxb-1",
-      appToken: "xapp-1",
-      join: [],
-      threadReplies: "auto",
-    });
+  test("loads the template as it is: the API and web chat, no chat service", async () => {
+    const config = await loadConfig(await writeConfig("template.yaml", CONFIG_TEMPLATE));
+    expect(config.channels).toEqual({});
+    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923, webui: true });
     expect(config.maxConcurrent).toBe(32);
     expect(config.codex).toEqual({});
   });
 
-  test("rejects the unfilled template with a clear message", async () => {
-    const path = await writeConfig("template.yaml", CONFIG_TEMPLATE);
-    const err = await loadConfig(path).catch((e) => e);
+  test("loads Slack once its section is uncommented and the tokens filled in", async () => {
+    const filled = CONFIG_TEMPLATE.replace("# channels:", "channels:")
+      .replace("#   slack:", "  slack:")
+      .replace("#     botToken: xoxb-REPLACE-ME", "    botToken: xoxb-1")
+      .replace("#     appToken: xapp-REPLACE-ME", "    appToken: xapp-1");
+    const config = await loadConfig(await writeConfig("filled.yaml", filled));
+    expect(config.channels).toEqual({
+      slack: { botToken: "xoxb-1", appToken: "xapp-1", join: [], threadReplies: "auto" },
+    });
+  });
+
+  test("rejects placeholder tokens with a clear message", async () => {
+    const unfilled = CONFIG_TEMPLATE.replace("# channels:", "channels:")
+      .replace("#   slack:", "  slack:")
+      .replace("#     botToken:", "    botToken:")
+      .replace("#     appToken:", "    appToken:");
+    const err = await loadConfig(await writeConfig("unfilled.yaml", unfilled)).catch((e) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect(err.message).toContain("channels.slack.botToken is still the placeholder");
     expect(err.message).toContain("channels.slack.appToken is still the placeholder");
@@ -248,10 +254,9 @@ describe(".config.example.yaml", () => {
     expect(example).toContain(DEFAULT_CONFIG_PATH);
   });
 
-  test("only enables the local API and Slack credentials by default", () => {
+  test("only enables the local API and web chat by default", () => {
     expect(Bun.YAML.parse(CONFIG_TEMPLATE)).toEqual({
       api: { enabled: true, host: "127.0.0.1", port: 2923, webui: true },
-      channels: { slack: { botToken: `xoxb-${PLACEHOLDER}`, appToken: `xapp-${PLACEHOLDER}` } },
     });
   });
 
