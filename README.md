@@ -172,7 +172,8 @@ the last-read version to prevent one turn from overwriting another's changes.
 
 Open `http://127.0.0.1:2923/` while the agent runs. Sessions are listed on the left, and a
 conversation shows the agent's commands, file changes and tool calls as it works, then its
-reply. Each session is a conversation with its own Codex session, like a Slack thread. With
+reply. Attach files with the paperclip, by pasting, or by dropping them on the message box;
+files the agent sends back can be downloaded, and pictures are shown in the chat. Each session is a conversation with its own Codex session, like a Slack thread. With
 `api.token` set, the page asks for the token once and keeps it in the browser. It works on
 a phone, and has light and dark themes that follow the system unless you pick one.
 
@@ -208,9 +209,11 @@ Chat sessions, each a conversation with its own Codex session like a Slack threa
 | `GET /api/sessions/:id`           | The session, its `history`, the `live` turn and a `cursor`           |
 | `PATCH /api/sessions/:id`         | Rename it (`title`)                                                  |
 | `DELETE /api/sessions/:id`        | Delete it; `409` while a turn is queued or running                   |
-| `POST /api/sessions/:id/messages` | Send `text` (optional `user`); `202` with `messageId`, `429` if full |
+| `POST /api/sessions/:id/files`    | Upload files for the next message (multipart, `file` fields)         |
+| `POST /api/sessions/:id/messages` | Send `text` and/or `files` (optional `user`); `202` with `messageId`, `429` if full |
 | `POST /api/sessions/:id/stop`     | Stop the running turn                                                |
 | `GET /api/sessions/:id/events`    | Stream the session's events (server-sent events)                     |
+| `GET /api/files?path=`            | Download a file from the workspace                                   |
 
 ```bash
 curl -X POST localhost:2923/api/sessions
@@ -224,7 +227,7 @@ and a time `at`. A turn produces them in this order:
 
 | `type`         | Carries                                                                                                                                                                                                                   |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user_message` | `text`, `user`                                                                                                                                                                                                            |
+| `user_message` | `text`, `user`, `files`                                                                                                                                                                                                          |
 | `turn_started` |                                                                                                                                                                                                                           |
 | `codex`        | `event`, a Codex SDK event as it is: `item.started`, `item.updated` and `item.completed` with reasoning, commands and their output, file changes, MCP tool calls and web searches, then `turn.completed` with token usage |
 | `status`       | `text`, a one-line summary such as "is running `bun test`…"; empty clears it                                                                                                                                              |
@@ -234,6 +237,23 @@ and a time `at`. A turn produces them in this order:
 Codex's last `agent_message` item is the reply as JSON. Show the `reply` event instead: it is
 that message parsed, or a notice from elseagent such as a timeout.
 
+To send files, upload them first, then pass the returned paths with the message. Images are
+shown to Codex as images; other files are listed for it to read. An upload is limited to
+10 files of 100 MB each.
+
+```bash
+curl -F file=@chart.png localhost:2923/api/sessions/$ID/files
+# [{"name":"chart.png","path":"attachments/api-chat-…/chart.png","size":48211,"mimetype":"image/png"}]
+curl -X POST localhost:2923/api/sessions/$ID/messages \
+  -H 'content-type: application/json' \
+  -d '{"text": "What does this show?", "files": ["attachments/api-chat-…/chart.png"]}'
+```
+
+Files in events (`files` of `user_message` and `reply`) are `{ name, path }`, with `path`
+relative to the workspace. `GET /api/files?path=` serves any file inside the workspace,
+always as a download. A file the agent sent from outside the workspace keeps its absolute
+path and cannot be downloaded.
+
 To show a session, load `GET /api/sessions/:id`, render `history` then `live`, and open the
 stream with `?after=<cursor>` so nothing is missed or repeated. A stream that reconnects
 with `Last-Event-ID` resumes where it stopped. Without either, a stream starts with the
@@ -242,8 +262,7 @@ turns in progress.
 elseagent stores no transcripts. `history` is read back from Codex's own session files, so
 it survives restarts, and it is gone once cleanup deletes a session's Codex threads.
 Notices elseagent posted itself are not part of it. Live events are held in memory only
-while their turn runs. Attachments are not supported over the API yet, and reply `files`
-are paths on the agent's machine.
+while their turn runs.
 
 ## Deployment
 
