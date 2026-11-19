@@ -3,7 +3,6 @@ import type { IncomingMessage, Reply } from "../channels/types.ts";
 import { type NewQueuedMessage, openStateDb, SessionStore } from "../state/index.ts";
 import { MUTED_REPLY, UNMUTED_REPLY } from "./follow.ts";
 import { createMessageHandler, NOTHING_TO_STOP } from "./inbox.ts";
-import { REACTIONS } from "./turn.ts";
 
 function setup() {
   const sessions = new SessionStore(openStateDb(":memory:"));
@@ -60,7 +59,7 @@ describe("message handler", () => {
     const { send, submitted, sessions, reactions } = setup();
     await send({ text: "fix the build" });
     expect(submitted.map((m) => m.mode)).toEqual(["direct"]);
-    expect(reactions).toEqual([REACTIONS.queued]);
+    expect(reactions).toEqual(["queued"]);
     expect(sessions.followState("C1:1.0")).toMatchObject({ muted: false, unanswered: 0 });
   });
 

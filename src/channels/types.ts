@@ -17,6 +17,21 @@ export type Fetch = (input: string, init: RequestInit) => Promise<Response>;
 /** Prefix of Telegram channel IDs (`tg:<chat id>`); Slack IDs are used as they are. */
 export const TELEGRAM_PREFIX = "tg:";
 
+/**
+ * Commands a channel hands to the agent as message text: its slash commands and stop button
+ * arrive as these, so the agent handles them like typed ones.
+ */
+/** Start the conversation over. Only a message without a chat message behind it (empty `ts`). */
+export const NEW_SESSION_COMMAND = "/new";
+/** Stop the turn running in the conversation. */
+export const STOP_COMMAND = "!stop";
+
+/**
+ * Where a message stands, shown as a reaction on it; each channel picks the emoji. A successful
+ * turn just removes "working": the reply itself says it's done.
+ */
+export type Reaction = "queued" | "working" | "failed";
+
 /** A file attached to a message, not downloaded yet (see `Channel.download`). */
 export interface Attachment {
   name: string;
@@ -91,10 +106,10 @@ export interface Reply {
    * message's ID or undefined.
    */
   post(markdown: string, choices?: string[], files?: OutgoingFile[]): Promise<string | undefined>;
-  /** Mark the message with a reaction, e.g. "eyes" (Slack names). Errors are ignored. */
-  react(name: string): Promise<void>;
+  /** Mark the message with a reaction. Errors are ignored. */
+  react(reaction: Reaction): Promise<void>;
   /** Remove one of our reactions from the message. Errors are ignored. */
-  unreact(name: string): Promise<void>;
+  unreact(reaction: Reaction): Promise<void>;
   /**
    * Show what the agent is doing ("is running tests…"); empty clears it. It also goes away
    * when we post. Errors are ignored.

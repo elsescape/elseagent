@@ -10,8 +10,10 @@ import type {
 import {
   type Attachment,
   type ContextMessage,
+  NEW_SESSION_COMMAND,
   NO_CONTEXT,
   type OutgoingFile,
+  type Reaction,
   type Reply,
   type ReplyTarget,
   type ThreadContext,
@@ -30,23 +32,14 @@ import {
 import {
   FailedTurnError,
   InterruptedStreamError,
+  type PendingOperation,
   type RecoveryStore,
   recoveryInput,
 } from "./recovery.ts";
 import { formatScheduledReply, parseReply, REPLY_SCHEMA } from "./reply.ts";
 import { stopReason, type TurnRunner } from "./scheduler.ts";
 import { scheduledTaskName } from "./schedules.ts";
-import { describeItem, StatusTicker, THINKING } from "./status.ts";
-
-/**
- * Reactions on the user's message that show where it is. A successful turn just removes
- * "working": the reply itself says it's done.
- */
-export const REACTIONS = {
-  queued: "hourglass_flowing_sand",
-  working: "eyes",
-  failed: "x",
-} as const;
+import { describeItem, type StatusOptions, StatusTicker, THINKING } from "./status.ts";
 
 /**
  * The `/new` slash command (DMs only): start the DM over with a new Codex session. It is
@@ -56,7 +49,7 @@ export const REACTIONS = {
 export function isNewSessionCommand(
   message: Pick<QueuedMessage, "text" | "ts" | "scheduleId">,
 ): boolean {
-  return message.scheduleId === null && message.ts === "" && message.text === "/new";
+  return message.scheduleId === null && message.ts === "" && message.text === NEW_SESSION_COMMAND;
 }
 
 /** Posted when a turn was cut short by a restart (at shutdown, or found at the next startup). */
@@ -78,7 +71,7 @@ export async function runStreamed(
   let finalResponse = "";
   let usage: Usage | null = null;
   let completed = false;
-  const pending = new Map<string, { id: string; type: string }>();
+  const pending = new Map<string, PendingOperation>();
   try {
     const { events } = await thread.runStreamed(input, options);
     for await (const event of events) {
@@ -112,7 +105,7 @@ export interface TurnDeps {
   /** A Codex client for this turn (it carries the turn's identity to the elseagent MCP tools). */
   codexFor(message: QueuedMessage): Pick<Codex, "startThread" | "resumeThread">;
   /** Throttling of the thread's loading status (tests shorten it). */
-  statusOptions?: ConstructorParameters<typeof StatusTicker>[1];
+  statusOptions?: StatusOptions;
   sessions: Pick<SessionStore, "get" | "touch" | "trackThread" | "reset" | "replied">;
   /** To skip a passive message that a later queued message will see as context anyway. */
   queue: Pick<MessageQueue, "hasNewerPending">;
@@ -129,6 +122,12 @@ export interface TurnDeps {
   turnTimeoutMs: number;
   sessionIdleMs: number;
   logger?: Pick<Console, "warn">;
+}
+
+/** The conversation a turn is recorded under, and the last message it has seen there. */
+interface ConversationRef {
+  key: string;
+  lastSeenTs: string;
 }
 
 /** A message as Codex sees it, with its attachments once downloaded. */
@@ -181,7 +180,7 @@ export function formatInput(
 /**
  * Run one Codex turn for a queued message.
  *
- * A Slack message continues its conversation's Codex thread (or starts one) with the thread
+ * A chat message continues its conversation's Codex thread (or starts one) with the thread
  * messages it hasn't seen, and the reply goes into that thread. A scheduled run always starts a
  * new Codex thread; when it posts a result or an error, the message opens a
  * thread, where replies continue the run's session like any conversation.
@@ -220,8 +219,8 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     };
     const messages: Said[] = [];
     for (const m of context.messages) messages.push({ ...m, saved: await save(m.files) });
-    const current: Said = { ...message, saved: await save(message.files) };
-    const text = formatInput({ ...message, ...current }, { ...context, messages }, workspace);
+    const current = { ...message, saved: await save(message.files) };
+    const text = formatInput(current, { ...context, messages }, workspace);
     const all = [...messages, current].flatMap((m) => m.saved ?? []);
     for (const f of all.filter((f) => f.error)) {
       logger.warn(`could not download ${f.name} for ${message.conversationKey}: ${f.error}`);
@@ -241,9 +240,9 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     // Scheduled runs and slash commands have no user message to react to; passive messages
     // weren't addressed to the agent.
     const quiet = !message.ts || passive;
-    const react = (name: string) => (quiet ? Promise.resolve() : reply.react(name));
-    const unreact = (name: string) => (quiet ? Promise.resolve() : reply.unreact(name));
-    await unreact(REACTIONS.queued);
+    const react = (reaction: Reaction) => (quiet ? Promise.resolve() : reply.react(reaction));
+    const unreact = (reaction: Reaction) => (quiet ? Promise.resolve() : reply.unreact(reaction));
+    await unreact("queued");
 
     // Handled in the queue like any message, so it waits for a running turn in the same
     // conversation instead of racing it.
@@ -261,10 +260,10 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     ) {
       return; // seen already, or a later turn will see it as context
     }
-    let conversation: { key: string; lastSeenTs: string } | null = scheduled
+    let conversation: ConversationRef | null = scheduled
       ? null
       : { key: message.conversationKey, lastSeenTs: message.ts };
-    await react(REACTIONS.working);
+    await react("working");
 
     const startedAt = now();
     const codex = deps.codexFor(message);
@@ -439,7 +438,7 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       await status.stop();
       // Keep the mapping even after a failure: the thread holds whatever context was built.
       // A superseded turn records nothing, so the direct turn gets its message as context.
-      const where = conversation as { key: string; lastSeenTs: string } | null;
+      const where = conversation;
       const superseded = stopReason(signal)?.kind === "superseded";
       if (thread.id && where && !superseded) sessions.touch(where.key, thread.id, where.lastSeenTs);
       // A silent scheduled run maps no conversation: track its Codex thread for cleanup.
@@ -462,8 +461,8 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
         }
       }
       if (replied && where) sessions.replied(where.key, message.user);
-      await unreact(REACTIONS.working);
-      if (failed && stopReason(signal)?.kind !== "superseded") await react(REACTIONS.failed);
+      await unreact("working");
+      if (failed && stopReason(signal)?.kind !== "superseded") await react("failed");
     }
   };
 }

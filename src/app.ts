@@ -6,7 +6,7 @@ import { createMessageHandler } from "./agent/inbox.ts";
 import { RecoveryStore } from "./agent/recovery.ts";
 import { Scheduler } from "./agent/scheduler.ts";
 import { ScheduleRunner } from "./agent/schedules.ts";
-import { createTurnRunner, REACTIONS, RESTARTED_REPLY } from "./agent/turn.ts";
+import { createTurnRunner, RESTARTED_REPLY } from "./agent/turn.ts";
 import { Channels } from "./channels/registry.ts";
 import { createSlackBot } from "./channels/slack/index.ts";
 import { createTelegramBot } from "./channels/telegram/index.ts";
@@ -223,8 +223,8 @@ async function reportInterrupted(queue: MessageQueue, channels: Channels): Promi
           .catch(() => {});
         continue;
       }
-      await reply.unreact(REACTIONS.working);
-      await reply.react(REACTIONS.failed);
+      await reply.unreact("working");
+      await reply.react("failed");
       await reply.post(RESTARTED_REPLY).catch(() => {});
     } catch (err) {
       console.warn(`could not report an interrupted turn: ${(err as Error).message}`);

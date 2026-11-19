@@ -5,7 +5,7 @@ import { codexThreads, sessions } from "./schema.ts";
 export interface SessionInfo {
   /** Null right after `/new`: the next turn starts a new Codex thread. */
   threadId: string | null;
-  /** Slack ts of the last message Codex has seen in this conversation. */
+  /** ID (ts) of the last message Codex has seen in this conversation. */
   lastSeenTs: string | null;
 }
 
@@ -40,7 +40,7 @@ export class SessionStore {
     return { threadId: row.threadId || null, lastSeenTs: row.lastSeenTs };
   }
 
-  /** Record a turn: the Codex thread the conversation uses and the last Slack message it saw. */
+  /** Record a turn: the Codex thread the conversation uses and the last message it saw. */
   touch(conversationKey: string, threadId: string, lastSeenTs: string | null = null): void {
     const lastActiveAt = this.now();
     this.db.transaction((tx) => {

@@ -4,7 +4,7 @@ import type { Attachment } from "../channels/types.ts";
 import type { StateDb } from "./db.ts";
 import { queue } from "./schema.ts";
 
-/** A Slack message waiting for, or being handled by, a Codex turn. */
+/** A message waiting for, or being handled by, a Codex turn. */
 export interface QueuedMessage {
   id: number;
   conversationKey: string;
@@ -13,7 +13,7 @@ export interface QueuedMessage {
   threadTs: string | null;
   user: string;
   text: string;
-  /** Set for a scheduled run (no Slack message to reply to). */
+  /** Set for a scheduled run (no chat message to reply to). */
   scheduleId: number | null;
   /** How sure it is the message is for the agent (see the queue table's `mode`). */
   mode: "direct" | "followup" | "passive";

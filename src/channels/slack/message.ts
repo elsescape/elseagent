@@ -1,9 +1,16 @@
 import type { KnownEventFromType, types } from "@slack/bolt";
-import type { Attachment, IncomingMessage } from "../types.ts";
+import { type Attachment, type IncomingMessage, type Reaction, STOP_COMMAND } from "../types.ts";
 
 type AppMentionEvent = types.AppMentionEvent;
 
 type MessageEvent = KnownEventFromType<"message">;
+
+/** The emoji name of each reaction. */
+export const REACTION_NAMES: Record<Reaction, string> = {
+  queued: "hourglass_flowing_sand",
+  working: "eyes",
+  failed: "x",
+};
 
 /** Slack DM channel IDs start with D. */
 export const isDm = (channel: string) => channel.startsWith("D");
@@ -138,7 +145,7 @@ export function stopButtonMessage(event: {
     ts: "",
     threadTs: event.thread_ts,
     user: event.user,
-    text: "!stop",
+    text: STOP_COMMAND,
     isDirect: isDm(event.channel),
   };
 }

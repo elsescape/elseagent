@@ -350,8 +350,8 @@ describe("replies", () => {
   test("reactions map to Telegram's emoji; unreact clears", async () => {
     const { bot, sent } = await setup();
     const reply = bot.replyTo({ channel: "tg:42", ts: "5" });
-    await reply.react("eyes");
-    await reply.unreact("eyes");
+    await reply.react("working");
+    await reply.unreact("working");
     expect(sent("setMessageReaction").map((p) => p.reaction)).toEqual([
       [{ type: "emoji", emoji: "👀" }],
       [],

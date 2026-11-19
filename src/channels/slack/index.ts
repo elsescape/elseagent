@@ -6,6 +6,7 @@ import {
   type Channel,
   type IncomingMessage,
   type Logger,
+  NEW_SESSION_COMMAND,
   NO_CONTEXT,
   type Reply,
   type ReplyTarget,
@@ -22,6 +23,7 @@ import {
   fromMention,
   fromThreadMessage,
   isDm,
+  REACTION_NAMES,
   slashCommandMessage,
   stopButtonMessage,
 } from "./message.ts";
@@ -124,7 +126,7 @@ export async function createSlackBot(
             channel_id: target.channel,
             ...(thread_ts ? { thread_ts } : {}),
             file_uploads,
-          } as Parameters<typeof client.files.uploadV2>[0]);
+          });
         } catch (err) {
           const names = files.map((f) => `\`${f.name}\``).join(", ");
           logger.warn(`slack: could not upload ${names}: ${(err as Error).message}`);
@@ -138,14 +140,14 @@ export async function createSlackBot(
       }
       return first;
     },
-    async react(name) {
+    async react(reaction) {
       await client.reactions
-        .add({ channel: target.channel, timestamp: target.ts, name })
+        .add({ channel: target.channel, timestamp: target.ts, name: REACTION_NAMES[reaction] })
         .catch(() => {});
     },
-    async unreact(name) {
+    async unreact(reaction) {
       await client.reactions
-        .remove({ channel: target.channel, timestamp: target.ts, name })
+        .remove({ channel: target.channel, timestamp: target.ts, name: REACTION_NAMES[reaction] })
         .catch(() => {});
     },
     async setStatus(status) {
@@ -222,7 +224,9 @@ export async function createSlackBot(
           return;
         }
         await ack();
-        await dispatch(slashCommandMessage(command.channel_id, command.user_id, "/new"));
+        await dispatch(
+          slashCommandMessage(command.channel_id, command.user_id, NEW_SESSION_COMMAND),
+        );
       });
       // A choice button: record the pick on the message, then treat it as the user's reply.
       app.action<BlockButtonAction>({ action_id: CHOICE_ACTION }, async ({ ack, body, action }) => {

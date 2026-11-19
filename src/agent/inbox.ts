@@ -1,11 +1,10 @@
-import { conversationKey, type MessageHandler } from "../channels/types.ts";
+import { conversationKey, type MessageHandler, STOP_COMMAND } from "../channels/types.ts";
 import type { QueuedMessage, SessionStore } from "../state/index.ts";
 import { followCommand, MUTED_REPLY, routeThreadMessage, UNMUTED_REPLY } from "./follow.ts";
 import type { Scheduler } from "./scheduler.ts";
-import { REACTIONS } from "./turn.ts";
 
 /** `!stop` (Telegram: `/stop`): stop the turn running in this conversation, right away. */
-export const isStopCommand = (text: string) => text.trim().toLowerCase() === "!stop";
+export const isStopCommand = (text: string) => text.trim().toLowerCase() === STOP_COMMAND;
 
 export const NOTHING_TO_STOP = "Nothing is running here.";
 
@@ -75,7 +74,7 @@ export function createMessageHandler({
     // A passive message stays quiet: nobody asked the agent anything.
     if (mode === "passive") return;
     if (result.status === "queued" && message.ts) {
-      await reply.react(REACTIONS.queued);
+      await reply.react("queued");
     } else if (result.status === "rejected") {
       await reply.post("I'm too busy right now. Please try again in a while.");
     }

@@ -1,6 +1,7 @@
 import { mkdir, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { Attachment, OutgoingFile } from "../channels/types.ts";
+import { formatSize } from "../util/text.ts";
 
 /** Attachments larger than this are not downloaded. */
 export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
@@ -82,12 +83,6 @@ export async function saveAttachments(
     }
   }
   return saved;
-}
-
-export function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
 /** How attached files are listed under a message for Codex (paths relative to `workspace`). */

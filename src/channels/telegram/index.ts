@@ -1,5 +1,5 @@
-import { formatSize } from "../../agent/files.ts";
 import { ConfigError, type TelegramConfig } from "../../config/index.ts";
+import { formatSize } from "../../util/text.ts";
 import { dispatchMessage } from "../dispatch.ts";
 import { replyParts } from "../markdown.ts";
 import {
@@ -7,10 +7,12 @@ import {
   type IncomingMessage,
   type Logger,
   type MessageHandler,
+  NEW_SESSION_COMMAND,
   NO_CONTEXT,
   type OutgoingFile,
   type Reply,
   type ReplyTarget,
+  STOP_COMMAND,
   TELEGRAM_PREFIX,
 } from "../types.ts";
 import {
@@ -225,8 +227,7 @@ export async function createTelegramBot(
         return target.startsThread ? topic : first;
       },
       async react(name) {
-        const emoji = REACTION_EMOJI[name];
-        if (emoji) await setReaction([emoji]);
+        await setReaction([REACTION_EMOJI[name]]);
       },
       async unreact() {
         // A bot has at most one reaction per message: removing one clears it.
@@ -325,9 +326,9 @@ export async function createTelegramBot(
     await dispatch(
       onMessage,
       command?.command === "new"
-        ? { ...message, ts: "", text: "/new" }
+        ? { ...message, ts: "", text: NEW_SESSION_COMMAND }
         : command?.command === "stop"
-          ? { ...message, text: "!stop" }
+          ? { ...message, text: STOP_COMMAND }
           : message,
     );
   };
