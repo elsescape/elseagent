@@ -13,7 +13,6 @@ import {
   isNewSessionCommand,
   NEW_SESSION_REPLY,
   PASSIVE_LABEL,
-  REACTIONS,
   type TurnDeps,
 } from "./turn.ts";
 
@@ -188,11 +187,7 @@ describe("turn runner", () => {
     ]);
     expect(posts).toEqual([{ text: "Fixed it.", choices: [] }]);
     // Success just removes "working": no extra reaction, the reply says it's done.
-    expect(reactions).toEqual([
-      `-${REACTIONS.queued}`,
-      `+${REACTIONS.working}`,
-      `-${REACTIONS.working}`,
-    ]);
+    expect(reactions).toEqual([`-queued`, `+working`, `-working`]);
     expect(sessions.get("C1:1.0", DAY)).toEqual({ threadId: "thread-1", lastSeenTs: "2.0" });
   });
 
@@ -240,7 +235,7 @@ describe("turn runner", () => {
     const { run, posts, reactions, sessions } = setup(waitForAbort, { turnTimeoutMs: 20 });
     await run(message(), never);
     expect(posts[0]?.text).toContain("took longer than");
-    expect(reactions.at(-1)).toBe(`+${REACTIONS.failed}`);
+    expect(reactions.at(-1)).toBe(`+failed`);
     expect(sessions.get("C1:1.0", DAY)?.threadId).toBe("thread-1");
   });
 
@@ -264,7 +259,7 @@ describe("turn runner", () => {
         choices: [],
       },
     ]);
-    expect(reactions.at(-1)).toBe(`+${REACTIONS.failed}`);
+    expect(reactions.at(-1)).toBe(`+failed`);
   });
 });
 
@@ -575,7 +570,7 @@ describe("cancellation", () => {
     controller.abort({ kind: "cancelled", by: "U_ADMIN" });
     await turn;
     expect(posts[0]?.text).toBe("Stopped by <@U_ADMIN>.");
-    expect(reactions.at(-1)).toBe(`+${REACTIONS.failed}`);
+    expect(reactions.at(-1)).toBe(`+failed`);
   });
 });
 

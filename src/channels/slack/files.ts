@@ -1,6 +1,4 @@
-import type { Attachment } from "../types.ts";
-
-type Fetch = (input: string, init: RequestInit) => Promise<Response>;
+import type { Attachment, Fetch } from "../types.ts";
 
 /** Slack serves private files from these hosts; the bot token is never sent anywhere else. */
 const isSlackFileUrl = (url: string) => {

@@ -1,10 +1,10 @@
 import type { UsageRecord } from "../state/index.ts";
+import { DAY_MS } from "../util/time.ts";
 import { formatTime } from "./cron.ts";
 
 export const USAGE_GROUPS = ["day", "user", "channel", "conversation", "schedule"] as const;
 export type UsageGroup = (typeof USAGE_GROUPS)[number];
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** At most this many groups are listed (the largest ones; days are all listed up to this). */
 export const MAX_USAGE_GROUPS = 60;
 

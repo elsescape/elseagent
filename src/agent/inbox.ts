@@ -1,17 +1,16 @@
-import { conversationKey, type MessageHandler } from "../channels/types.ts";
-import type { SessionStore } from "../state/index.ts";
+import { conversationKey, type MessageHandler, STOP_COMMAND } from "../channels/types.ts";
+import type { QueuedMessage, SessionStore } from "../state/index.ts";
 import { followCommand, MUTED_REPLY, routeThreadMessage, UNMUTED_REPLY } from "./follow.ts";
 import type { Scheduler } from "./scheduler.ts";
-import { REACTIONS } from "./turn.ts";
 
 /** `!stop` (Telegram: `/stop`): stop the turn running in this conversation, right away. */
-export const isStopCommand = (text: string) => text.trim().toLowerCase() === "!stop";
+export const isStopCommand = (text: string) => text.trim().toLowerCase() === STOP_COMMAND;
 
 export const NOTHING_TO_STOP = "Nothing is running here.";
 
 export interface InboxDeps {
   scheduler: Pick<Scheduler, "submit" | "cancel">;
-  sessions: Pick<SessionStore, "followState" | "addressed" | "noteUnanswered" | "setMuted">;
+  sessions: Pick<SessionStore, "followState" | "addressed" | "noteUnanswered" | "mute">;
   now?: () => number;
 }
 
@@ -37,13 +36,12 @@ export function createMessageHandler({
 
     const command = channelThread ? followCommand(message.text) : null;
     if (command) {
-      sessions.addressed(key); // make sure the thread has a session to hold the setting
-      sessions.setMuted(key, command === "mute");
+      sessions.mute(key, command === "mute");
       await reply.post(command === "mute" ? MUTED_REPLY : UNMUTED_REPLY);
       return;
     }
 
-    let mode: "direct" | "followup" | "passive" = "direct";
+    let mode: QueuedMessage["mode"] = "direct";
     if (message.unaddressed) {
       const route = routeThreadMessage(
         sessions.followState(key),
@@ -75,7 +73,7 @@ export function createMessageHandler({
     // A passive message stays quiet: nobody asked the agent anything.
     if (mode === "passive") return;
     if (result.status === "queued" && message.ts) {
-      await reply.react(REACTIONS.queued);
+      await reply.react("queued");
     } else if (result.status === "rejected") {
       await reply.post("I'm too busy right now. Please try again in a while.");
     }

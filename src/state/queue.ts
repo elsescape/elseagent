@@ -1,10 +1,10 @@
-import { and, asc, count, eq, gt, inArray, lte, notExists, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { Attachment } from "../channels/types.ts";
-import type { StateDb } from "./db.ts";
+import { countWhere, type StateDb } from "./db.ts";
 import { queue } from "./schema.ts";
 
-/** A Slack message waiting for, or being handled by, a Codex turn. */
+/** A message waiting for, or being handled by, a Codex turn. */
 export interface QueuedMessage {
   id: number;
   conversationKey: string;
@@ -13,7 +13,7 @@ export interface QueuedMessage {
   threadTs: string | null;
   user: string;
   text: string;
-  /** Set for a scheduled run (no Slack message to reply to). */
+  /** Set for a scheduled run (no chat message to reply to). */
   scheduleId: number | null;
   /** How sure it is the message is for the agent (see the queue table's `mode`). */
   mode: "direct" | "followup" | "passive";
@@ -52,18 +52,12 @@ export class MessageQueue {
   }
 
   pendingCount(): number {
-    const row = this.db.select({ n: count() }).from(queue).where(eq(queue.status, "pending")).get();
-    return row?.n ?? 0;
+    return countWhere(this.db, queue, eq(queue.status, "pending"));
   }
 
   /** 1-based position among pending messages, oldest first. */
   position(id: number): number {
-    const row = this.db
-      .select({ n: count() })
-      .from(queue)
-      .where(and(eq(queue.status, "pending"), lte(queue.id, id)))
-      .get();
-    return row?.n ?? 0;
+    return countWhere(this.db, queue, and(eq(queue.status, "pending"), lte(queue.id, id)));
   }
 
   /**

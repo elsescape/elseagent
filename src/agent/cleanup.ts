@@ -1,9 +1,9 @@
 import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionStore } from "../state/index.ts";
-import { attachmentsDir, formatSize } from "./files.ts";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { formatSize } from "../util/text.ts";
+import { DAY_MS } from "../util/time.ts";
+import { attachmentsDir } from "./files.ts";
 
 export interface CleanupDeps {
   sessions: Pick<

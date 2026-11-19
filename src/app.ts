@@ -6,14 +6,14 @@ import { createMessageHandler } from "./agent/inbox.ts";
 import { RecoveryStore } from "./agent/recovery.ts";
 import { Scheduler } from "./agent/scheduler.ts";
 import { ScheduleRunner } from "./agent/schedules.ts";
-import { createTurnRunner, REACTIONS } from "./agent/turn.ts";
+import { createTurnRunner, RESTARTED_REPLY } from "./agent/turn.ts";
 import { Channels } from "./channels/registry.ts";
 import { createSlackBot } from "./channels/slack/index.ts";
 import { createTelegramBot } from "./channels/telegram/index.ts";
 import { buildThreadOptions, createCodex, deleteCodexThread, resolveCodexPath } from "./codex.ts";
 import { codexAuthStatus, ensureCodexLogin } from "./codex-login.ts";
 import { type Config, ConfigError } from "./config/index.ts";
-import { runWithLifecycle } from "./lifecycle.ts";
+import { type AppLifecycle, runWithLifecycle } from "./lifecycle.ts";
 import { type McpEndpoint, startMcpServer } from "./mcp/server.ts";
 import {
   MessageQueue,
@@ -22,15 +22,13 @@ import {
   SessionStore,
   UsageStore,
 } from "./state/index.ts";
+import { DAY_MS, MINUTE_MS } from "./util/time.ts";
 
 export interface StartOptions {
   configPath: string;
   /** Validate everything and print the summary, but do not connect to Slack or Telegram. */
   dryRun?: boolean;
 }
-
-const MINUTE = 60_000;
-const DAY = 24 * 60 * MINUTE;
 
 /** Start the agent with a validated config. */
 export async function startApp(
@@ -108,7 +106,7 @@ export async function startApp(
     const queue = new MessageQueue(db);
     const schedules = new ScheduleStore(db);
     const usage = new UsageStore(db);
-    const sessionIdleMs = sessionIdleDays * DAY;
+    const sessionIdleMs = sessionIdleDays * DAY_MS;
     // Set once the MCP server is up (it needs the scheduler, which needs this to start turns).
     let mcp: McpEndpoint | undefined;
 
@@ -130,7 +128,7 @@ export async function startApp(
         threadContext: channels.threadContext,
         download: channels.download,
         usage,
-        turnTimeoutMs: turnTimeoutMinutes * MINUTE,
+        turnTimeoutMs: turnTimeoutMinutes * MINUTE_MS,
         sessionIdleMs,
       }),
       {
@@ -169,25 +167,7 @@ export async function startApp(
     defer("MCP server", mcp.stop);
     defer("scheduler", () => scheduler.stop());
 
-    // Messages that were mid-turn when the previous process stopped.
-    for (const message of queue.takeInterrupted()) {
-      try {
-        const reply = channels.replyTo(message);
-        if (message.scheduleId !== null) {
-          await reply
-            .post(`A scheduled task (#${message.scheduleId}) was interrupted by a restart.`)
-            .catch(() => {});
-          continue;
-        }
-        await reply.unreact(REACTIONS.working);
-        await reply.react(REACTIONS.failed);
-        await reply
-          .post("The agent restarted while working on this. Send it again to retry.")
-          .catch(() => {});
-      } catch (err) {
-        console.warn(`could not report an interrupted turn: ${(err as Error).message}`);
-      }
-    }
+    await reportInterrupted(queue, channels);
 
     const onMessage = createMessageHandler({ scheduler, sessions });
 
@@ -203,16 +183,12 @@ export async function startApp(
     console.log(`state: ${dbPath}`);
     scheduler.pump(); // pick up messages still queued from before a restart
 
-    const expireSessions = () => {
+    every(defer, "session expiry timer", 60 * MINUTE_MS, () => {
       const removed = sessions.expire(sessionIdleMs);
       if (removed) console.log(`sessions: forgot ${removed} idle conversation(s)`);
-    };
-    expireSessions();
-    const gc = setInterval(expireSessions, 60 * MINUTE);
-    defer("session expiry timer", () => clearInterval(gc));
-
+    });
     // Queue scheduled tasks when they are due (also catches up once after a restart).
-    const runDueSchedules = () => {
+    every(defer, "schedule timer", MINUTE_MS / 2, () => {
       try {
         scheduleRunner.tick((schedule, err) =>
           console.warn(`schedule #${schedule.id} "${schedule.name}": ${err}`),
@@ -220,11 +196,40 @@ export async function startApp(
       } catch (err) {
         console.warn(`could not check due schedules: ${err}`);
       }
-    };
-    runDueSchedules();
-    const ticker = setInterval(runDueSchedules, 30_000);
-    defer("schedule timer", () => clearInterval(ticker));
+    });
   });
+}
+
+/** Run `task` now and then every `intervalMs`, until shutdown. */
+function every(
+  defer: AppLifecycle["defer"],
+  name: string,
+  intervalMs: number,
+  task: () => void,
+): void {
+  task();
+  const timer = setInterval(task, intervalMs);
+  defer(name, () => clearInterval(timer));
+}
+
+/** Tell the users whose messages were mid-turn when the previous process stopped. */
+async function reportInterrupted(queue: MessageQueue, channels: Channels): Promise<void> {
+  for (const message of queue.takeInterrupted()) {
+    try {
+      const reply = channels.replyTo(message);
+      if (message.scheduleId !== null) {
+        await reply
+          .post(`A scheduled task (#${message.scheduleId}) was interrupted by a restart.`)
+          .catch(() => {});
+        continue;
+      }
+      await reply.unreact("working");
+      await reply.react("failed");
+      await reply.post(RESTARTED_REPLY).catch(() => {});
+    } catch (err) {
+      console.warn(`could not report an interrupted turn: ${(err as Error).message}`);
+    }
+  }
 }
 
 /**

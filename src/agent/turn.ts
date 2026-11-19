@@ -10,13 +10,16 @@ import type {
 import {
   type Attachment,
   type ContextMessage,
+  NEW_SESSION_COMMAND,
   NO_CONTEXT,
   type OutgoingFile,
+  type Reaction,
   type Reply,
   type ReplyTarget,
   type ThreadContext,
 } from "../channels/types.ts";
 import type { MessageQueue, QueuedMessage, SessionStore, UsageStore } from "../state/index.ts";
+import { MINUTE_MS } from "../util/time.ts";
 import {
   attachmentsDir,
   describeFiles,
@@ -29,23 +32,15 @@ import {
 import {
   FailedTurnError,
   InterruptedStreamError,
+  type PendingOperation,
+  type RecoveryCheckpoint,
   type RecoveryStore,
   recoveryInput,
 } from "./recovery.ts";
 import { formatScheduledReply, parseReply, REPLY_SCHEMA } from "./reply.ts";
-import { stopReason, type TurnRunner } from "./scheduler.ts";
+import { type StopReason, stopReason, type TurnRunner } from "./scheduler.ts";
 import { scheduledTaskName } from "./schedules.ts";
-import { describeItem, StatusTicker, THINKING } from "./status.ts";
-
-/**
- * Reactions on the user's message that show where it is. A successful turn just removes
- * "working": the reply itself says it's done.
- */
-export const REACTIONS = {
-  queued: "hourglass_flowing_sand",
-  working: "eyes",
-  failed: "x",
-} as const;
+import { describeItem, type StatusOptions, StatusTicker, THINKING } from "./status.ts";
 
 /**
  * The `/new` slash command (DMs only): start the DM over with a new Codex session. It is
@@ -55,8 +50,11 @@ export const REACTIONS = {
 export function isNewSessionCommand(
   message: Pick<QueuedMessage, "text" | "ts" | "scheduleId">,
 ): boolean {
-  return message.scheduleId === null && message.ts === "" && message.text === "/new";
+  return message.scheduleId === null && message.ts === "" && message.text === NEW_SESSION_COMMAND;
 }
+
+/** Posted when a turn was cut short by a restart (at shutdown, or found at the next startup). */
+export const RESTARTED_REPLY = "The agent restarted while working on this. Send it again to retry.";
 
 export const NEW_SESSION_REPLY =
   "Started a new session. I won't remember what we discussed before this point.";
@@ -74,7 +72,7 @@ export async function runStreamed(
   let finalResponse = "";
   let usage: Usage | null = null;
   let completed = false;
-  const pending = new Map<string, { id: string; type: string }>();
+  const pending = new Map<string, PendingOperation>();
   try {
     const { events } = await thread.runStreamed(input, options);
     for await (const event of events) {
@@ -108,7 +106,7 @@ export interface TurnDeps {
   /** A Codex client for this turn (it carries the turn's identity to the elseagent MCP tools). */
   codexFor(message: QueuedMessage): Pick<Codex, "startThread" | "resumeThread">;
   /** Throttling of the thread's loading status (tests shorten it). */
-  statusOptions?: ConstructorParameters<typeof StatusTicker>[1];
+  statusOptions?: StatusOptions;
   sessions: Pick<SessionStore, "get" | "touch" | "trackThread" | "reset" | "replied">;
   /** To skip a passive message that a later queued message will see as context anyway. */
   queue: Pick<MessageQueue, "hasNewerPending">;
@@ -125,6 +123,12 @@ export interface TurnDeps {
   turnTimeoutMs: number;
   sessionIdleMs: number;
   logger?: Pick<Console, "warn">;
+}
+
+/** The conversation a turn is recorded under, and the last message it has seen there. */
+interface ConversationRef {
+  key: string;
+  lastSeenTs: string;
 }
 
 /** A message as Codex sees it, with its attachments once downloaded. */
@@ -175,9 +179,159 @@ export function formatInput(
 }
 
 /**
+ * Posts a turn's messages and keeps track of the conversation they belong to. A chat message is
+ * answered in its conversation. A scheduled run has none until it posts: its first message (the
+ * notification) opens one, and whatever follows goes in that message's thread.
+ */
+function createPoster(
+  replyTo: TurnDeps["replyTo"],
+  reply: Reply,
+  message: QueuedMessage,
+  scheduled: boolean,
+) {
+  let replied = false;
+  let conversation: ConversationRef | null = scheduled
+    ? null
+    : { key: message.conversationKey, lastSeenTs: message.ts };
+  const taskTitle = scheduled
+    ? scheduledTaskName(message.text) || `Task #${message.scheduleId}`
+    : "";
+  // A scheduled run's notification, once posted: later posts (an error) go in its thread.
+  let resultTs: string | undefined;
+  const inThread = (ts: string) => replyTo({ channel: message.channel, ts: "", threadTs: ts });
+
+  return {
+    /** Whether the agent has answered in the conversation. */
+    get replied() {
+      return replied;
+    },
+    /** Where the turn is recorded; null for a scheduled run that has posted nothing. */
+    get conversation() {
+      return conversation;
+    },
+    async post(text: string, choices: string[] = [], files: OutgoingFile[] = []): Promise<void> {
+      if (!scheduled) {
+        await reply.post(text, choices, files);
+        replied = true;
+        return;
+      }
+      if (resultTs) {
+        await inThread(resultTs).post(text, choices, files);
+        return;
+      }
+      const { root, details } = formatScheduledReply(taskTitle, text);
+      const ts = await reply.post(root, details ? [] : choices, details ? [] : files);
+      replied = true;
+      if (ts) {
+        resultTs = ts;
+        conversation = { key: `${message.channel}:${ts}`, lastSeenTs: ts };
+      }
+      if (!details) return;
+      // Without a thread (a Telegram chat without topics) the details follow in the chat.
+      const target = ts ? inThread(ts) : replyTo({ channel: message.channel, ts: "" });
+      await target.post(details, choices, files);
+    },
+  };
+}
+
+/** The operations a failed turn left without a confirmed result, if any. */
+function interruptionOf(err: unknown): InterruptedStreamError | undefined {
+  if (err instanceof InterruptedStreamError) return err;
+  if (err instanceof FailedTurnError && err.pending.length) {
+    return new InterruptedStreamError(err, err.pending);
+  }
+  return undefined;
+}
+
+/**
+ * Whether a lost event stream may be continued: one bounded continuation of the SAME session,
+ * never a replay of the request. Not when a tool was in flight (now or at an earlier
+ * interruption): its side effects may already have happened.
+ */
+function canContinue(
+  err: unknown,
+  checkpoint: RecoveryCheckpoint | null | undefined,
+  passive: boolean,
+): err is InterruptedStreamError {
+  return (
+    err instanceof InterruptedStreamError &&
+    !err.pending.length &&
+    !err.completed &&
+    !checkpoint?.pending.length &&
+    !passive
+  );
+}
+
+/**
+ * After a turn, in the conversation it is recorded under: remember the operations an
+ * interruption left unconfirmed, or clear the checkpoint once a turn completes with none pending.
+ */
+async function updateCheckpoint(
+  recovery: NonNullable<TurnDeps["recovery"]>,
+  conversation: string,
+  turn: {
+    threadId: string;
+    interruption?: InterruptedStreamError;
+    failed: boolean;
+    now: () => number;
+  },
+): Promise<void> {
+  if (turn.interruption) {
+    await recovery.save(conversation, {
+      threadId: turn.threadId,
+      pending: turn.interruption.pending,
+      at: new Date(turn.now()).toISOString(),
+    });
+  } else if (!turn.failed) {
+    // A completed conversational reply is not proof that an uncertain write was reconciled.
+    const prior = await recovery.get(conversation);
+    if (!prior?.pending.length) await recovery.clear(conversation);
+  }
+}
+
+/**
+ * What a turn that did not finish tells the chat (`post`) and whether the error is logged (`log`).
+ * A superseded turn says nothing: the direct message that took over sees it as context. Neither
+ * does a passive one, unless someone stopped it: nobody asked, so no errors or timeouts in the
+ * thread.
+ */
+export function failureNotice({
+  stopped,
+  timedOut,
+  passive,
+  unconfirmed,
+  turnTimeoutMs,
+}: {
+  stopped: StopReason | null;
+  timedOut: boolean;
+  passive: boolean;
+  /** An operation was running when the stream was lost. */
+  unconfirmed: boolean;
+  turnTimeoutMs: number;
+}): { post?: string; log?: "passive" | "failed" } {
+  if (stopped?.kind === "superseded") return {};
+  if (passive && stopped?.kind !== "cancelled") return { log: "passive" };
+  if (stopped?.kind === "cancelled") return { post: `Stopped by <@${stopped.by}>.` };
+  if (stopped?.kind === "shutdown") return { post: RESTARTED_REPLY };
+  if (timedOut) {
+    return {
+      post:
+        `Stopped: this took longer than ${Math.round(turnTimeoutMs / MINUTE_MS)} minutes. ` +
+        "The conversation is kept, so you can follow up.",
+    };
+  }
+  return {
+    log: "failed",
+    post: unconfirmed
+      ? "The connection was interrupted while an operation was running. Its result is unconfirmed, so I have not retried it. Reply here to reconcile the saved state and continue."
+      : "The task failed. Reply in this thread to ask me to investigate or continue.",
+  };
+}
+
+/**
  * Run one Codex turn for a queued message.
  *
- * A Slack message continues its conversation's Codex thread (or starts one) with the thread
+ * A chat message continues its conversation's Codex thread (or starts one) with the thread
  * messages it hasn't seen, and the reply goes into that thread. A scheduled run always starts a
  * new Codex thread; when it posts a result or an error, the message opens a
  * thread, where replies continue the run's session like any conversation.
@@ -216,8 +370,8 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     };
     const messages: Said[] = [];
     for (const m of context.messages) messages.push({ ...m, saved: await save(m.files) });
-    const current: Said = { ...message, saved: await save(message.files) };
-    const text = formatInput({ ...message, ...current }, { ...context, messages }, workspace);
+    const current = { ...message, saved: await save(message.files) };
+    const text = formatInput(current, { ...context, messages }, workspace);
     const all = [...messages, current].flatMap((m) => m.saved ?? []);
     for (const f of all.filter((f) => f.error)) {
       logger.warn(`could not download ${f.name} for ${message.conversationKey}: ${f.error}`);
@@ -237,9 +391,9 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     // Scheduled runs and slash commands have no user message to react to; passive messages
     // weren't addressed to the agent.
     const quiet = !message.ts || passive;
-    const react = (name: string) => (quiet ? Promise.resolve() : reply.react(name));
-    const unreact = (name: string) => (quiet ? Promise.resolve() : reply.unreact(name));
-    await unreact(REACTIONS.queued);
+    const react = (reaction: Reaction) => (quiet ? Promise.resolve() : reply.react(reaction));
+    const unreact = (reaction: Reaction) => (quiet ? Promise.resolve() : reply.unreact(reaction));
+    await unreact("queued");
 
     // Handled in the queue like any message, so it waits for a running turn in the same
     // conversation instead of racing it.
@@ -257,10 +411,8 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
     ) {
       return; // seen already, or a later turn will see it as context
     }
-    let conversation: { key: string; lastSeenTs: string } | null = scheduled
-      ? null
-      : { key: message.conversationKey, lastSeenTs: message.ts };
-    await react(REACTIONS.working);
+    const poster = createPoster(deps.replyTo, reply, message, scheduled);
+    await react("working");
 
     const startedAt = now();
     const codex = deps.codexFor(message);
@@ -269,41 +421,6 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       : codex.startThread(threadOptions);
     const timeout = AbortSignal.timeout(turnTimeoutMs);
     const turnSignal = AbortSignal.any([timeout, signal]);
-
-    let replied = false;
-    const taskTitle = scheduled
-      ? scheduledTaskName(message.text) || `Task #${message.scheduleId}`
-      : "";
-    // A scheduled run's notification, once posted: later posts (an error) go in its thread.
-    let resultTs: string | undefined;
-    const postAndTrack = async (
-      text: string,
-      choices: string[] = [],
-      files: OutgoingFile[] = [],
-    ) => {
-      if (!scheduled) {
-        await reply.post(text, choices, files);
-        replied = true;
-        return;
-      }
-      const inThread = (ts: string) =>
-        deps.replyTo({ channel: message.channel, ts: "", threadTs: ts });
-      if (resultTs) {
-        await inThread(resultTs).post(text, choices, files);
-        return;
-      }
-      const { root, details } = formatScheduledReply(taskTitle, text);
-      const ts = await reply.post(root, details ? [] : choices, details ? [] : files);
-      replied = true;
-      if (ts) {
-        resultTs = ts;
-        conversation = { key: `${message.channel}:${ts}`, lastSeenTs: ts };
-      }
-      if (!details) return;
-      // Without a thread (a Telegram chat without topics) the details follow in the chat.
-      const target = ts ? inThread(ts) : deps.replyTo({ channel: message.channel, ts: "" });
-      await target.post(details, choices, files);
-    };
 
     // The "is thinking…" line at the bottom of the thread (none for scheduled runs, and none
     // for passive messages: the agent may not answer at all).
@@ -353,16 +470,7 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
           );
           thread = codex.startThread(threadOptions);
           result = await runTurn(null);
-        } else if (
-          err instanceof InterruptedStreamError &&
-          thread.id &&
-          !err.pending.length &&
-          !err.completed &&
-          !checkpoint?.pending.length &&
-          !passive
-        ) {
-          // One bounded continuation of the SAME session, never a replay of the request.
-          // In-flight tools are not retried: their side effects may already have happened.
+        } else if (canContinue(err, checkpoint, passive) && thread.id) {
           logger.warn(
             `codex: recovering interrupted stream for ${message.conversationKey}: ${err.message}`,
           );
@@ -397,69 +505,49 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
         const body = text.trim() + notes;
         // Files alone are a reply too (except for a scheduled run: its text starts the thread).
         const empty = files.length > 0 && !scheduled ? "" : "_(no response)_";
-        await postAndTrack(body.trim() || empty, choices, files);
+        await poster.post(body.trim() || empty, choices, files);
       }
       failed = false;
     } catch (err) {
-      if (err instanceof InterruptedStreamError) interruption = err;
-      else if (err instanceof FailedTurnError && err.pending.length) {
-        interruption = new InterruptedStreamError(err, err.pending);
-      }
+      interruption = interruptionOf(err);
       await status.stop();
-      const stopped = stopReason(signal);
-      if (stopped?.kind === "superseded") {
-        // A direct message in this conversation took over; it sees this one as context.
-      } else if (passive && stopped?.kind !== "cancelled") {
-        // Nobody asked: don't post errors or timeouts into the thread.
-        logger.warn(
-          `codex: passive turn for ${message.conversationKey} ended: ${(err as Error).message}`,
-        );
-      } else if (stopped?.kind === "cancelled") {
-        await postAndTrack(`Stopped by <@${stopped.by}>.`);
-      } else if (stopped?.kind === "shutdown") {
-        await postAndTrack("The agent restarted while working on this. Send it again to retry.");
-      } else if (timeout.aborted) {
-        await postAndTrack(
-          `Stopped: this took longer than ${Math.round(turnTimeoutMs / 60_000)} minutes. ` +
-            "The conversation is kept, so you can follow up.",
-        );
-      } else {
-        logger.warn(`codex: turn failed for ${message.conversationKey}: ${(err as Error).message}`);
-        await postAndTrack(
-          interruption?.pending.length
-            ? "The connection was interrupted while an operation was running. Its result is unconfirmed, so I have not retried it. Reply here to reconcile the saved state and continue."
-            : "The task failed. Reply in this thread to ask me to investigate or continue.",
-        );
+      const notice = failureNotice({
+        stopped: stopReason(signal),
+        timedOut: timeout.aborted,
+        passive,
+        unconfirmed: Boolean(interruption?.pending.length),
+        turnTimeoutMs,
+      });
+      if (notice.log) {
+        const what =
+          notice.log === "passive"
+            ? `passive turn for ${message.conversationKey} ended`
+            : `turn failed for ${message.conversationKey}`;
+        logger.warn(`codex: ${what}: ${(err as Error).message}`);
       }
+      if (notice.post) await poster.post(notice.post);
     } finally {
       await status.stop();
       // Keep the mapping even after a failure: the thread holds whatever context was built.
       // A superseded turn records nothing, so the direct turn gets its message as context.
-      const where = conversation as { key: string; lastSeenTs: string } | null;
+      const where = poster.conversation;
       const superseded = stopReason(signal)?.kind === "superseded";
       if (thread.id && where && !superseded) sessions.touch(where.key, thread.id, where.lastSeenTs);
       // A silent scheduled run maps no conversation: track its Codex thread for cleanup.
       else if (thread.id && scheduled && !where) {
         sessions.trackThread(thread.id, message.conversationKey);
       }
-      if (where && thread.id) {
-        if (interruption) {
-          await deps.recovery?.save(where.key, {
-            threadId: thread.id,
-            pending: interruption.pending,
-            at: new Date(now()).toISOString(),
-          });
-        } else if (!failed) {
-          // A completed conversational reply is not proof that an uncertain write was reconciled.
-          const prior = await deps.recovery?.get(where.key);
-          if (!prior?.pending.length) {
-            await deps.recovery?.clear(where.key);
-          }
-        }
+      if (where && thread.id && deps.recovery) {
+        await updateCheckpoint(deps.recovery, where.key, {
+          threadId: thread.id,
+          interruption,
+          failed,
+          now,
+        });
       }
-      if (replied && where) sessions.replied(where.key, message.user);
-      await unreact(REACTIONS.working);
-      if (failed && stopReason(signal)?.kind !== "superseded") await react(REACTIONS.failed);
+      if (poster.replied && where) sessions.replied(where.key, message.user);
+      await unreact("working");
+      if (failed && stopReason(signal)?.kind !== "superseded") await react("failed");
     }
   };
 }

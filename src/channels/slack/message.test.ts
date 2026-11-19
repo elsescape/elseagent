@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { conversationKey } from "../types.ts";
 import {
-  conversationKey,
   deduplicateMessages,
   fromDirectMessage,
   fromMention,

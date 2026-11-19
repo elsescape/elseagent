@@ -4,7 +4,7 @@ import type { Attachment } from "../channels/types.ts";
 
 // Only routing state lives here. Conversation history is kept by Codex itself.
 
-/** Maps a Slack conversation (thread, or top-level DM) to the Codex thread holding its context. */
+/** Maps a conversation (thread, or top-level DM) to the Codex thread holding its context. */
 export const sessions = sqliteTable(
   "sessions",
   {
@@ -12,7 +12,7 @@ export const sessions = sqliteTable(
     threadId: text("thread_id").notNull(),
     /** Unix epoch milliseconds. */
     lastActiveAt: integer("last_active_at").notNull(),
-    /** Slack ts of the last message Codex has seen; thread context starts after it. */
+    /** ID (ts) of the last message Codex has seen; thread context starts after it. */
     lastSeenTs: text("last_seen_ts"),
     /**
      * Thread following (Slack channel threads): the agent reads messages that don't mention it
@@ -30,7 +30,7 @@ export const sessions = sqliteTable(
 );
 
 /**
- * Buffer of Slack messages not yet answered: waiting for a slot, or being handled right now.
+ * Buffer of messages not yet answered: waiting for a slot, or being handled right now.
  * A row is deleted as soon as its turn ends, so this never grows into a message history.
  */
 export const queue = sqliteTable(
@@ -75,7 +75,7 @@ export const schedules = sqliteTable(
     cron: text("cron"),
     /** IANA time zone, e.g. Asia/Shanghai. */
     timezone: text("timezone").notNull(),
-    /** Slack channel ID the results are posted to. */
+    /** Chat the results are posted to: a Slack channel ID, or `tg:<chat id>`. */
     channel: text("channel").notNull(),
     /** What Codex is asked to do on each run. */
     prompt: text("prompt").notNull(),

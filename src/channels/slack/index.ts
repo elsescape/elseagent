@@ -1,15 +1,18 @@
 import { App, type BlockButtonAction, LogLevel, SocketModeReceiver, webApi } from "@slack/bolt";
 import { ConfigError, type SlackConfig } from "../../config/index.ts";
-import { splitMarkdown } from "../markdown.ts";
+import { dispatchMessage } from "../dispatch.ts";
+import { replyParts } from "../markdown.ts";
 import {
   type Channel,
   type IncomingMessage,
+  type Logger,
+  NEW_SESSION_COMMAND,
   NO_CONTEXT,
   type Reply,
   type ReplyTarget,
   TELEGRAM_PREFIX,
 } from "../types.ts";
-import { ensureChannel, joinChannels, type Logger } from "./channels.ts";
+import { ensureChannel, joinChannels } from "./channels.ts";
 import { CHOICE_ACTION, choiceBlocks, resolvedBlocks } from "./choices.ts";
 import { fetchThreadContext } from "./context.ts";
 import { downloadSlackFile } from "./files.ts";
@@ -19,6 +22,8 @@ import {
   fromDirectMessage,
   fromMention,
   fromThreadMessage,
+  isDm,
+  REACTION_NAMES,
   slashCommandMessage,
   stopButtonMessage,
 } from "./message.ts";
@@ -88,9 +93,7 @@ export async function createSlackBot(
 
   const replyTo = (target: ReplyTarget): Reply => ({
     async post(markdown, choices = [], files = []) {
-      // Files alone need no text message.
-      const parts =
-        markdown.trim() || files.length === 0 ? splitMarkdown(markdown, SLACK_MARKDOWN_LIMIT) : [];
+      const parts = replyParts(markdown, files.length > 0, SLACK_MARKDOWN_LIMIT);
       let first: string | undefined;
       for (const [i, part] of parts.entries()) {
         // Continuation parts of a new top-level message go into its thread.
@@ -123,7 +126,7 @@ export async function createSlackBot(
             channel_id: target.channel,
             ...(thread_ts ? { thread_ts } : {}),
             file_uploads,
-          } as Parameters<typeof client.files.uploadV2>[0]);
+          });
         } catch (err) {
           const names = files.map((f) => `\`${f.name}\``).join(", ");
           logger.warn(`slack: could not upload ${names}: ${(err as Error).message}`);
@@ -137,18 +140,18 @@ export async function createSlackBot(
       }
       return first;
     },
-    async react(name) {
+    async react(reaction) {
       await client.reactions
-        .add({ channel: target.channel, timestamp: target.ts, name })
+        .add({ channel: target.channel, timestamp: target.ts, name: REACTION_NAMES[reaction] })
         .catch(() => {});
     },
-    async unreact(name) {
+    async unreact(reaction) {
       await client.reactions
-        .remove({ channel: target.channel, timestamp: target.ts, name })
+        .remove({ channel: target.channel, timestamp: target.ts, name: REACTION_NAMES[reaction] })
         .catch(() => {});
     },
     async setStatus(status) {
-      const topLevelDm = !target.threadTs && target.channel.startsWith("D");
+      const topLevelDm = !target.threadTs && isDm(target.channel);
       const threadTs = target.threadTs ?? (topLevelDm ? target.ts : undefined);
       if (!threadTs) return;
       if (topLevelDm && status) topLevelDmSessions.set(target.channel, threadTs);
@@ -190,25 +193,18 @@ export async function createSlackBot(
     download: (file, dest, signal) => downloadSlackFile(config.botToken, file, dest, signal),
     ensureChannel: (ref) => ensureChannel(client, ref),
     async start(onMessage) {
-      const dispatch = async (message: IncomingMessage) => {
-        const reply = replyTo(message);
-        try {
-          await onMessage(message, reply);
-        } catch (err) {
-          logger.warn(`slack: handler failed: ${(err as Error).stack ?? err}`);
-          await reply.post("Sorry, something went wrong while handling that.").catch(() => {});
-        }
-      };
-      const dispatchMessage = deduplicateMessages(dispatch);
+      const dispatch = (message: IncomingMessage) =>
+        dispatchMessage("slack", onMessage, message, replyTo(message), logger);
+      const dispatchOnce = deduplicateMessages(dispatch);
       app.event("app_mention", async ({ event }) => {
         const message = fromMention(event, identity.userId);
-        if (message) await dispatchMessage(message);
+        if (message) await dispatchOnce(message);
       });
       app.message(async ({ message: event }) => {
         const message =
           fromDirectMessage(event, identity.userId) ??
           (config.threadReplies === "auto" ? fromThreadMessage(event, identity.userId) : null);
-        if (message) await dispatchMessage(message);
+        if (message) await dispatchOnce(message);
       });
       // The stopped turn returns its Slack session to active during cleanup.
       app.event("agent_session_stopped", async ({ event }) => {
@@ -220,7 +216,7 @@ export async function createSlackBot(
       // `/new` in a DM starts it over; it goes through the queue like a message (no ts: there
       // is no Slack message behind a slash command). Elsewhere, explain where it works.
       app.command("/new", async ({ ack, command }) => {
-        if (!command.channel_id.startsWith("D")) {
+        if (!isDm(command.channel_id)) {
           await ack({
             response_type: "ephemeral",
             text: "`/new` works in a direct message with me: it starts our DM over.",
@@ -228,7 +224,9 @@ export async function createSlackBot(
           return;
         }
         await ack();
-        await dispatch(slashCommandMessage(command.channel_id, command.user_id, "/new"));
+        await dispatch(
+          slashCommandMessage(command.channel_id, command.user_id, NEW_SESSION_COMMAND),
+        );
       });
       // A choice button: record the pick on the message, then treat it as the user's reply.
       app.action<BlockButtonAction>({ action_id: CHOICE_ACTION }, async ({ ack, body, action }) => {
@@ -250,7 +248,7 @@ export async function createSlackBot(
           threadTs: posted.thread_ts,
           user: body.user.id,
           text: action.value ?? "",
-          isDirect: channel.startsWith("D"),
+          isDirect: isDm(channel),
         });
       });
       await app.start();

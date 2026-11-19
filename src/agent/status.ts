@@ -1,13 +1,11 @@
 import { basename } from "node:path";
 import type { ThreadItem } from "@openai/codex-sdk";
+import { truncate } from "../util/text.ts";
 
 export const THINKING = "is thinking…";
 const MAX_LENGTH = 80;
 
-const clip = (text: string, max: number) => {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-};
+const clip = (text: string, max: number) => truncate(text.replace(/\s+/g, " ").trim(), max);
 
 /** The status line for what Codex just started doing, or null to keep the current one. */
 export function describeItem(item: ThreadItem): string | null {

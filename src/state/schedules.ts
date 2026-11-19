@@ -1,5 +1,5 @@
-import { and, asc, count, eq, isNotNull, lte } from "drizzle-orm";
-import type { StateDb } from "./db.ts";
+import { and, asc, eq, isNotNull, lte } from "drizzle-orm";
+import { countWhere, type StateDb } from "./db.ts";
 import { schedules } from "./schema.ts";
 
 export type Schedule = typeof schedules.$inferSelect;
@@ -31,11 +31,9 @@ export class ScheduleStore {
     return this.db.select().from(schedules).orderBy(asc(schedules.id)).all();
   }
 
+  /** Schedules that will still run (a one-time schedule that has run is not counted). */
   count(): number {
-    return (
-      this.db.select({ n: count() }).from(schedules).where(isNotNull(schedules.nextRunAt)).get()
-        ?.n ?? 0
-    );
+    return countWhere(this.db, schedules, isNotNull(schedules.nextRunAt));
   }
 
   delete(id: number): Schedule | null {

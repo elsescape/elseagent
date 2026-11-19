@@ -1,11 +1,11 @@
-import { and, count, desc, eq, inArray, lt, ne, notInArray, sql } from "drizzle-orm";
-import type { StateDb } from "./db.ts";
+import { and, desc, eq, inArray, lt, ne, notInArray, sql } from "drizzle-orm";
+import { countWhere, type StateDb } from "./db.ts";
 import { codexThreads, sessions } from "./schema.ts";
 
 export interface SessionInfo {
   /** Null right after `/new`: the next turn starts a new Codex thread. */
   threadId: string | null;
-  /** Slack ts of the last message Codex has seen in this conversation. */
+  /** ID (ts) of the last message Codex has seen in this conversation. */
   lastSeenTs: string | null;
 }
 
@@ -21,6 +21,10 @@ export interface FollowState {
   /** Who the agent's last reply answered. */
   repliedTo: string | null;
 }
+
+/** Stored as the thread id of a session without a Codex thread yet (the column is NOT NULL). */
+const NO_THREAD = "";
+const hasThread = ne(sessions.threadId, NO_THREAD);
 
 /** Maps a conversation to the Codex thread that holds its context. */
 export class SessionStore {
@@ -40,7 +44,7 @@ export class SessionStore {
     return { threadId: row.threadId || null, lastSeenTs: row.lastSeenTs };
   }
 
-  /** Record a turn: the Codex thread the conversation uses and the last Slack message it saw. */
+  /** Record a turn: the Codex thread the conversation uses and the last message it saw. */
   touch(conversationKey: string, threadId: string, lastSeenTs: string | null = null): void {
     const lastActiveAt = this.now();
     this.db.transaction((tx) => {
@@ -83,8 +87,7 @@ export class SessionStore {
    * earlier thread messages out of the new session's context.
    */
   reset(conversationKey: string, fromTs: string | null): void {
-    // An empty thread id marks "no Codex thread yet" (the column is NOT NULL).
-    this.touch(conversationKey, "", fromTs);
+    this.touch(conversationKey, NO_THREAD, fromTs);
   }
 
   /** The thread's follow state, or null if the agent has no session there. */
@@ -108,11 +111,32 @@ export class SessionStore {
    * followed even before the first turn ends, and note the time.
    */
   addressed(conversationKey: string): void {
+    this.address(conversationKey, {});
+  }
+
+  /**
+   * Mute a thread (only reply there when mentioned) or follow it again. Asking is addressing
+   * the agent, so the thread gets a session to hold the setting if it has none.
+   */
+  mute(conversationKey: string, muted: boolean): void {
+    this.address(conversationKey, { muted });
+  }
+
+  private address(conversationKey: string, change: { muted?: boolean }): void {
     const now = this.now();
     this.db
       .insert(sessions)
-      .values({ conversationKey, threadId: "", lastActiveAt: now, lastAddressedAt: now })
-      .onConflictDoUpdate({ target: sessions.conversationKey, set: { lastAddressedAt: now } })
+      .values({
+        conversationKey,
+        threadId: NO_THREAD,
+        lastActiveAt: now,
+        lastAddressedAt: now,
+        ...change,
+      })
+      .onConflictDoUpdate({
+        target: sessions.conversationKey,
+        set: { lastAddressedAt: now, ...change },
+      })
       .run();
   }
 
@@ -134,18 +158,6 @@ export class SessionStore {
       .run();
   }
 
-  /** Mute (only reply when mentioned) or unmute a conversation. False if it has no session. */
-  setMuted(conversationKey: string, muted: boolean): boolean {
-    return (
-      this.db
-        .update(sessions)
-        .set({ muted })
-        .where(eq(sessions.conversationKey, conversationKey))
-        .returning({ key: sessions.conversationKey })
-        .all().length > 0
-    );
-  }
-
   /** Most recently active sessions first. */
   list(limit = 20): {
     conversationKey: string;
@@ -163,16 +175,14 @@ export class SessionStore {
         unanswered: sessions.unanswered,
       })
       .from(sessions)
-      .where(ne(sessions.threadId, "")) // just reset with /new: no Codex session yet
+      .where(hasThread) // not ones just reset with /new
       .orderBy(desc(sessions.lastActiveAt))
       .limit(limit)
       .all();
   }
 
   count(): number {
-    return (
-      this.db.select({ n: count() }).from(sessions).where(ne(sessions.threadId, "")).get()?.n ?? 0
-    );
+    return countWhere(this.db, sessions, hasThread);
   }
 
   /** Drop one conversation's session; its next message starts a new Codex session. */

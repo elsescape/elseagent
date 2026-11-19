@@ -1,3 +1,5 @@
+import type { Logger } from "../types.ts";
+
 /** The subset of the Slack WebClient used to join channels (kept small for testing). */
 export interface ChannelsClient {
   conversations: {
@@ -13,11 +15,6 @@ export interface ChannelsClient {
     join(args: { channel: string }): Promise<unknown>;
     info(args: { channel: string }): Promise<{ channel?: { is_member?: boolean } }>;
   };
-}
-
-export interface Logger {
-  info(msg: string): void;
-  warn(msg: string): void;
 }
 
 const CHANNEL_ID = /^[CGD][A-Z0-9]{8,}$/;

@@ -1,3 +1,5 @@
+import { truncate } from "../../util/text.ts";
+
 /**
  * Telegram counts at most 4,096 characters per message after formatting; split the Markdown
  * well below that, since list bullets and links change the length a little.
@@ -66,5 +68,5 @@ export function plainLine(markdown: string, max: number): string {
     .replaceAll("&amp;", "&")
     .replace(/\s+/g, " ")
     .trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return truncate(text, max);
 }

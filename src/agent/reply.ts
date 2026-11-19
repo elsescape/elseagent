@@ -1,3 +1,5 @@
+import { truncate } from "../util/text.ts";
+
 /** What Codex returns at the end of a turn (enforced with the SDK's `outputSchema`). */
 export interface AgentReply {
   /** False: stay silent (honored for scheduled runs and messages not addressed to the agent). */
@@ -52,7 +54,7 @@ export function parseReply(finalResponse: string): AgentReply {
       .map((c) => c.trim())
       .filter((c, i, all) => c && all.indexOf(c) === i)
       .slice(0, MAX_CHOICES)
-      .map((c) => (c.length > MAX_CHOICE_LENGTH ? `${c.slice(0, MAX_CHOICE_LENGTH - 1)}…` : c));
+      .map((c) => truncate(c, MAX_CHOICE_LENGTH));
     const files = (Array.isArray(raw.files) ? raw.files : []).filter(
       (f): f is string => typeof f === "string" && f.trim() !== "",
     );

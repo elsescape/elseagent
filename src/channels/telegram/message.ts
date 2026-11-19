@@ -1,4 +1,4 @@
-import { type Attachment, type IncomingMessage, TELEGRAM_PREFIX } from "../types.ts";
+import { type Attachment, type IncomingMessage, type Reaction, TELEGRAM_PREFIX } from "../types.ts";
 import type { TgFile, TgMessage } from "./api.ts";
 
 /** The channel ID of a Telegram chat. */
@@ -89,11 +89,11 @@ export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const isPhotoFile = (name: string, size: number) =>
   /\.(jpe?g|png|webp)$/i.test(name) && size <= MAX_PHOTO_BYTES;
 
-/** Telegram allows only a fixed set of reaction emoji; these stand in for the Slack names. */
-export const REACTION_EMOJI: Record<string, string> = {
-  hourglass_flowing_sand: "🫡",
-  eyes: "👀",
-  x: "😢",
+/** Telegram allows only a fixed set of reaction emoji. */
+export const REACTION_EMOJI: Record<Reaction, string> = {
+  queued: "🫡",
+  working: "👀",
+  failed: "😢",
 };
 
 /** The status line as a draft message: "is running `x`…" → "Running `x`…". */
