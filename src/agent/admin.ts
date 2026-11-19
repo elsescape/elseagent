@@ -6,8 +6,9 @@ import type {
   SessionStore,
   UsageStore,
 } from "../state/index.ts";
+import { truncate } from "../util/text.ts";
 import type { Cleanup } from "./cleanup.ts";
-import { checkTimezone, formatTime, ScheduleError } from "./cron.ts";
+import { checkTimezone, formatTime } from "./cron.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { ScheduleRunner } from "./schedules.ts";
 import { summarizeUsage, type UsageGroup, UsagePeriodError, usagePeriod } from "./usage.ts";
@@ -44,9 +45,10 @@ export class AdminError extends Error {
   override name = "AdminError";
 }
 
-const preview = (text: string, max = 120) =>
-  text.length > max ? `${text.slice(0, max - 1)}…` : text;
+const preview = (text: string) => truncate(text, 120);
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+const timeIn = (ms: number | null, timezone: string) =>
+  ms === null ? null : formatTime(ms, timezone);
 
 /** The agent's own state and controls, exposed to Codex through the elseagent MCP tools. */
 export class Admin {
@@ -116,7 +118,7 @@ export class Admin {
    * (only answer mentions). Defaults to the caller's conversation.
    */
   threadFollow(follow: boolean, caller: Caller, conversation = caller.conversationKey): string {
-    if (!conversation.includes(":") || conversation.startsWith("tg:")) {
+    if (!conversation.includes(":") || conversation.startsWith(TELEGRAM_PREFIX)) {
       throw new AdminError("Only Slack channel threads can be followed or muted.");
     }
     this.deps.sessions.addressed(conversation);
@@ -228,11 +230,9 @@ export class Admin {
       channel: s.channel,
       prompt: s.prompt,
       createdBy: s.createdBy,
-      nextRun: s.nextRunAt === null ? null : formatTime(s.nextRunAt, s.timezone),
-      lastSkipped: s.lastSkippedAt === null ? null : formatTime(s.lastSkippedAt, s.timezone),
-      lastRun: s.lastRunAt === null ? null : formatTime(s.lastRunAt, s.timezone),
+      nextRun: timeIn(s.nextRunAt, s.timezone),
+      lastSkipped: timeIn(s.lastSkippedAt, s.timezone),
+      lastRun: timeIn(s.lastRunAt, s.timezone),
     };
   }
 }
-
-export { ScheduleError };

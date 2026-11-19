@@ -21,3 +21,8 @@ export function splitMarkdown(text: string, limit: number): string[] {
   if (rest) parts.push(rest);
   return parts;
 }
+
+/** The text messages of a reply. Files alone need no text message. */
+export function replyParts(markdown: string, hasFiles: boolean, limit: number): string[] {
+  return markdown.trim() || !hasFiles ? splitMarkdown(markdown, limit) : [];
+}

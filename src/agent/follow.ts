@@ -1,9 +1,10 @@
 import type { FollowState } from "../state/index.ts";
+import { DAY_MS } from "../util/time.ts";
 
 /** A thread stops being followed after this many messages without a reply from the agent… */
 export const FOLLOW_MAX_UNANSWERED = 100;
 /** …or this long since it was last mentioned or replied. */
-export const FOLLOW_IDLE_MS = 10 * 24 * 60 * 60 * 1000;
+export const FOLLOW_IDLE_MS = 10 * DAY_MS;
 
 /** `!mute` / `!unmute` in a thread: quick, without a Codex turn. (Plain words work too.) */
 export function followCommand(text: string): "mute" | "unmute" | null {

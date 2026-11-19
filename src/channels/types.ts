@@ -6,6 +6,14 @@
 
 export type Platform = "slack" | "telegram";
 
+export interface Logger {
+  info(msg: string): void;
+  warn(msg: string): void;
+}
+
+/** The part of `fetch` the channels use (tests pass a fake). */
+export type Fetch = (input: string, init: RequestInit) => Promise<Response>;
+
 /** Prefix of Telegram channel IDs (`tg:<chat id>`); Slack IDs are used as they are. */
 export const TELEGRAM_PREFIX = "tg:";
 

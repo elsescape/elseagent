@@ -1,5 +1,5 @@
 import { conversationKey, type MessageHandler } from "../channels/types.ts";
-import type { SessionStore } from "../state/index.ts";
+import type { QueuedMessage, SessionStore } from "../state/index.ts";
 import { followCommand, MUTED_REPLY, routeThreadMessage, UNMUTED_REPLY } from "./follow.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { REACTIONS } from "./turn.ts";
@@ -43,7 +43,7 @@ export function createMessageHandler({
       return;
     }
 
-    let mode: "direct" | "followup" | "passive" = "direct";
+    let mode: QueuedMessage["mode"] = "direct";
     if (message.unaddressed) {
       const route = routeThreadMessage(
         sessions.followState(key),

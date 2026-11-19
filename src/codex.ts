@@ -2,8 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Codex, type CodexOptions, type ThreadOptions } from "@openai/codex-sdk";
 import { buildInstructions } from "./agent/instructions.ts";
-import type { CodexConfig } from "./config/index.ts";
-import { ConfigError } from "./config/index.ts";
+import { type CodexConfig, ConfigError } from "./config/index.ts";
 import { TOKEN_ENV, TURN_HEADER } from "./mcp/server.ts";
 
 /** Codex features turned off for every turn (same as `codex --disable plugins --disable apps`). */

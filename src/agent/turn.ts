@@ -17,6 +17,7 @@ import {
   type ThreadContext,
 } from "../channels/types.ts";
 import type { MessageQueue, QueuedMessage, SessionStore, UsageStore } from "../state/index.ts";
+import { MINUTE_MS } from "../util/time.ts";
 import {
   attachmentsDir,
   describeFiles,
@@ -57,6 +58,9 @@ export function isNewSessionCommand(
 ): boolean {
   return message.scheduleId === null && message.ts === "" && message.text === "/new";
 }
+
+/** Posted when a turn was cut short by a restart (at shutdown, or found at the next startup). */
+export const RESTARTED_REPLY = "The agent restarted while working on this. Send it again to retry.";
 
 export const NEW_SESSION_REPLY =
   "Started a new session. I won't remember what we discussed before this point.";
@@ -417,10 +421,10 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       } else if (stopped?.kind === "cancelled") {
         await postAndTrack(`Stopped by <@${stopped.by}>.`);
       } else if (stopped?.kind === "shutdown") {
-        await postAndTrack("The agent restarted while working on this. Send it again to retry.");
+        await postAndTrack(RESTARTED_REPLY);
       } else if (timeout.aborted) {
         await postAndTrack(
-          `Stopped: this took longer than ${Math.round(turnTimeoutMs / 60_000)} minutes. ` +
+          `Stopped: this took longer than ${Math.round(turnTimeoutMs / MINUTE_MS)} minutes. ` +
             "The conversation is kept, so you can follow up.",
         );
       } else {

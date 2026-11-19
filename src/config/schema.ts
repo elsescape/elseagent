@@ -1,5 +1,6 @@
 import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import { z } from "zod";
+import { isTimezone } from "../util/time.ts";
 
 /** Shown as-is in help; expanded with `expandHome` before use. */
 export const DEFAULT_CONFIG_PATH = "~/.elseagent/config.yml";
@@ -27,15 +28,6 @@ const requiredString = (name: string) =>
       (v) => !v.includes(PLACEHOLDER),
       `${name} is still the placeholder; set the real value`,
     );
-
-function isTimezone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 const positiveInt = (name: string) =>
   z.int(`${name} must be a whole number`).positive(`${name} must be greater than 0`);

@@ -1,3 +1,5 @@
+import type { Fetch } from "../types.ts";
+
 /**
  * A minimal Telegram Bot API client: the few methods and fields elseagent uses.
  * https://core.telegram.org/bots/api
@@ -85,8 +87,6 @@ export class TelegramError extends Error {
     super(`${method}: ${description}`);
   }
 }
-
-type Fetch = (input: string, init: RequestInit) => Promise<Response>;
 
 /** A file to upload: its path on disk and the name shown in the chat. */
 export interface TgUpload {

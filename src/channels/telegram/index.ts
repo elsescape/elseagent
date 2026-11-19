@@ -1,9 +1,11 @@
 import { formatSize } from "../../agent/files.ts";
 import { ConfigError, type TelegramConfig } from "../../config/index.ts";
-import { splitMarkdown } from "../markdown.ts";
+import { dispatchMessage } from "../dispatch.ts";
+import { replyParts } from "../markdown.ts";
 import {
   type Channel,
   type IncomingMessage,
+  type Logger,
   type MessageHandler,
   NO_CONTEXT,
   type OutgoingFile,
@@ -48,11 +50,6 @@ export interface TelegramIdentity {
 export interface TelegramBot extends Channel {
   platform: "telegram";
   identity: TelegramIdentity;
-}
-
-interface Logger {
-  info(msg: string): void;
-  warn(msg: string): void;
 }
 
 export interface TelegramOptions {
@@ -213,11 +210,7 @@ export async function createTelegramBot(
             topic = String(threadId);
           }
         }
-        // Files alone need no text message.
-        const parts =
-          markdown.trim() || files.length === 0
-            ? splitMarkdown(markdown, TELEGRAM_MARKDOWN_LIMIT)
-            : [];
+        const parts = replyParts(markdown, files.length > 0, TELEGRAM_MARKDOWN_LIMIT);
         let first: string | undefined;
         for (const [i, part] of parts.entries()) {
           const keyboard =
@@ -285,15 +278,8 @@ export async function createTelegramBot(
     { messages: IncomingMessage[]; timer?: ReturnType<typeof setTimeout> }
   >();
 
-  const dispatch = async (onMessage: MessageHandler, message: IncomingMessage) => {
-    const reply = replyTo(message);
-    try {
-      await onMessage(message, reply);
-    } catch (err) {
-      logger.warn(`telegram: handler failed: ${(err as Error).stack ?? err}`);
-      await reply.post("Sorry, something went wrong while handling that.").catch(() => {});
-    }
-  };
+  const dispatch = (onMessage: MessageHandler, message: IncomingMessage) =>
+    dispatchMessage("telegram", onMessage, message, replyTo(message), logger);
 
   const onTelegramMessage = async (onMessage: MessageHandler, m: TgMessage) => {
     if (m.chat.type !== "private" || !m.from || m.from.is_bot) return;

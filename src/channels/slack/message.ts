@@ -5,7 +5,8 @@ type AppMentionEvent = types.AppMentionEvent;
 
 type MessageEvent = KnownEventFromType<"message">;
 
-export { conversationKey } from "../types.ts";
+/** Slack DM channel IDs start with D. */
+export const isDm = (channel: string) => channel.startsWith("D");
 
 /** Ignore redelivery of recent Slack messages, including delivery through both subscriptions. */
 export function deduplicateMessages(dispatch: (message: IncomingMessage) => Promise<void>) {
@@ -138,7 +139,7 @@ export function stopButtonMessage(event: {
     threadTs: event.thread_ts,
     user: event.user,
     text: "!stop",
-    isDirect: event.channel.startsWith("D"),
+    isDirect: isDm(event.channel),
   };
 }
 
