@@ -113,20 +113,47 @@ const telegramSchema = z.object(
 const optionalSection = <T extends z.ZodType>(schema: T) =>
   z.preprocess((v) => v ?? undefined, schema.optional());
 
-const NO_CHANNEL = "configure at least one channel: channels.slack or channels.telegram (or both)";
+const NO_CHANNEL =
+  "configure at least one channel: channels.slack or channels.telegram (or both), " +
+  "or leave the api enabled";
 
-// Where people talk to the agent: each channel is turned on by its section. At least one.
+// Where people talk to the agent: each channel is turned on by its section. Without one, the
+// agent is only reachable through the HTTP API.
 const channelsSchema = z.preprocess(
   (v) => v ?? {},
-  z
-    .object(
-      {
-        slack: optionalSection(slackSchema),
-        telegram: optionalSection(telegramSchema),
-      },
-      { error: "channels must be a section with slack and/or telegram" },
-    )
-    .refine((c) => c.slack || c.telegram, { error: NO_CHANNEL }),
+  z.object(
+    {
+      slack: optionalSection(slackSchema),
+      telegram: optionalSection(telegramSchema),
+    },
+    { error: "channels must be a section with slack and/or telegram" },
+  ),
+);
+
+/** Hosts only this machine can reach; anything else needs `api.token`. */
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
+const NO_API_TOKEN =
+  "api.token is required when api.host is not a loopback address (127.0.0.1, localhost, ::1)";
+
+// The HTTP API (dashboard data and chat sessions), served under /api.
+const apiSchema = z.object(
+  {
+    enabled: z.boolean("api.enabled must be true or false").default(true),
+    host: z.string().trim().min(1).default("127.0.0.1"),
+    port: z
+      .int("api.port must be a whole number")
+      .min(1, "api.port must be between 1 and 65535")
+      .max(65535, "api.port must be between 1 and 65535")
+      .default(2923),
+    // Requests must send `Authorization: Bearer <token>`. Without one, only loopback hosts.
+    token: z
+      .string()
+      .trim()
+      .min(16, "api.token must be at least 16 characters")
+      .refine((v) => !v.includes(PLACEHOLDER), "api.token is still the placeholder")
+      .optional(),
+  },
+  { error: "api must be a section with enabled, host, port and token" },
 );
 
 export const configSchema = agentSchema
@@ -134,16 +161,23 @@ export const configSchema = agentSchema
     // Optional sections may be missing or empty (`codex:` with nothing under it parses as null).
     codex: z.preprocess((v) => v ?? {}, codexSchema),
     channels: channelsSchema,
+    api: z.preprocess((v) => v ?? {}, apiSchema),
   })
   // Unknown top-level keys are mistakes (a typo, or `env:`/`agent:`/`integrations:` from
   // older configs).
-  .strict();
+  .strict()
+  .refine((c) => c.api.enabled || c.channels.slack || c.channels.telegram, { error: NO_CHANNEL })
+  .refine((c) => !c.api.enabled || c.api.token || LOOPBACK_HOSTS.includes(c.api.host), {
+    error: NO_API_TOKEN,
+    path: ["api", "token"],
+  });
 
 export type Config = z.infer<typeof configSchema>;
 export type ChannelsConfig = Config["channels"];
 export type SlackConfig = NonNullable<ChannelsConfig["slack"]>;
 export type TelegramConfig = NonNullable<ChannelsConfig["telegram"]>;
 export type CodexConfig = Config["codex"];
+export type ApiConfig = Config["api"];
 
 /** Every config section; the example must include each field. */
 export const configSections = {
@@ -151,4 +185,5 @@ export const configSections = {
   codex: codexSchema,
   "channels.slack": slackSchema,
   "channels.telegram": telegramSchema,
+  api: apiSchema,
 };

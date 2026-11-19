@@ -1,5 +1,6 @@
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import pkg from "../package.json";
 import { Admin } from "./agent/admin.ts";
 import { Cleanup } from "./agent/cleanup.ts";
 import { createMessageHandler } from "./agent/inbox.ts";
@@ -7,15 +8,19 @@ import { RecoveryStore } from "./agent/recovery.ts";
 import { Scheduler } from "./agent/scheduler.ts";
 import { ScheduleRunner } from "./agent/schedules.ts";
 import { createTurnRunner, RESTARTED_REPLY } from "./agent/turn.ts";
+import { createApiChat } from "./api/channel.ts";
+import { EventHub } from "./api/events.ts";
+import { startApiServer } from "./api/server.ts";
 import { configuredChannelNames, connectChannels } from "./channels/adapters.ts";
-import type { Channels } from "./channels/registry.ts";
+import { Channels } from "./channels/registry.ts";
 import { buildThreadOptions, createCodex, deleteCodexThread, resolveCodexPath } from "./codex.ts";
 import { codexAuthStatus, ensureCodexLogin } from "./codex-login.ts";
-import { type Config, ConfigError } from "./config/index.ts";
+import { type ApiConfig, type Config, ConfigError } from "./config/index.ts";
 import { type AppLifecycle, runWithLifecycle } from "./lifecycle.ts";
 import { createMemoryTools } from "./mcp/memory-tools.ts";
 import { type McpEndpoint, startMcpServer } from "./mcp/server.ts";
 import { createTodoTools } from "./mcp/todo-tools.ts";
+import { ApiSessionStore } from "./state/api-sessions.ts";
 import {
   MessageQueue,
   openStateDb,
@@ -64,7 +69,8 @@ export async function startApp(
     ["reasoning effort", threadOptions.modelReasoningEffort ?? "(codex default)"],
     ["prompt", prompt ? `${prompt.length} chars` : "(none)"],
     ["time zone", timezone],
-    ["channels", configuredChannelNames(config.channels).join(", ")],
+    ["channels", configuredChannelNames(config.channels).join(", ") || "(none)"],
+    ["api", describeApi(config.api)],
     [
       "limits",
       `${maxConcurrent} concurrent, queue ${maxQueue}, ` +
@@ -86,11 +92,17 @@ export async function startApp(
     signal.throwIfAborted();
 
     // Connect-time checks (tokens) for every configured channel, before anything starts.
-    const channels = await connectChannels(config.channels, signal);
+    const chatChannels = await connectChannels(config.channels, signal);
     // One database per agent, named after its bot, so several agents can share a state directory.
-    const dbPath = join(stateDir, `${channels.stateKey}.sqlite`);
+    // An agent without a chat service is named after its API.
+    const dbPath = join(stateDir, `${chatChannels[0]?.stateKey ?? "api"}.sqlite`);
     const db = openStateDb(dbPath);
     defer("state database", () => db.$client.close());
+    // The HTTP API is a channel too: its chat sessions run through the same queue and turns.
+    const hub = new EventHub();
+    const apiSessions = new ApiSessionStore(db);
+    const api = config.api.enabled ? createApiChat({ hub, sessions: apiSessions }) : undefined;
+    const channels = new Channels(api ? [...chatChannels, api.channel] : chatChannels);
     const sessions = new SessionStore(db);
     const queue = new MessageQueue(db);
     const schedules = new ScheduleStore(db);
@@ -99,33 +111,31 @@ export async function startApp(
     // Set once the MCP server is up (it needs the scheduler, which needs this to start turns).
     let mcp: McpEndpoint | undefined;
 
-    const scheduler = new Scheduler(
+    const runTurn = createTurnRunner({
+      codexFor: (message) =>
+        createCodex({
+          codexPath,
+          prompt,
+          channelInstructions: channels.for(message.channel).instructions,
+          mcp: mcp && { url: mcp.url, token: mcp.token, turnId: message.id },
+        }),
+      sessions,
+      recovery: new RecoveryStore(join(stateDir, "recovery")),
       queue,
-      createTurnRunner({
-        codexFor: (message) =>
-          createCodex({
-            codexPath,
-            prompt,
-            channelInstructions: channels.for(message.channel).instructions,
-            mcp: mcp && { url: mcp.url, token: mcp.token, turnId: message.id },
-          }),
-        sessions,
-        recovery: new RecoveryStore(join(stateDir, "recovery")),
-        queue,
-        threadOptions,
-        replyTo: channels.replyTo,
-        threadContext: channels.threadContext,
-        download: channels.download,
-        usage,
-        turnTimeoutMs: turnTimeoutMinutes * MINUTE_MS,
-        sessionIdleMs,
-      }),
-      {
-        maxConcurrent,
-        maxQueue,
-        onError: (err, m) => console.warn(`turn for ${m.conversationKey} failed: ${err}`),
-      },
-    );
+      threadOptions,
+      replyTo: channels.replyTo,
+      threadContext: channels.threadContext,
+      download: channels.download,
+      usage,
+      turnTimeoutMs: turnTimeoutMinutes * MINUTE_MS,
+      sessionIdleMs,
+      onEvent: api?.onCodexEvent,
+    });
+    const scheduler = new Scheduler(queue, api ? api.observe(runTurn) : runTurn, {
+      maxConcurrent,
+      maxQueue,
+      onError: (err, m) => console.warn(`turn for ${m.conversationKey} failed: ${err}`),
+    });
 
     const scheduleRunner = new ScheduleRunner(schedules, scheduler);
     const admin = new Admin({
@@ -146,9 +156,11 @@ export async function startApp(
       defaultTimezone: timezone,
     });
     // The elseagent tools, registered with every Codex turn (see buildCodexOptions).
+    const memories = new MemoryStore(db);
+    const todos = new TodoStore(db);
     const toolGroups = [
-      createMemoryTools(new MemoryStore(db)),
-      createTodoTools(new TodoStore(db)),
+      createMemoryTools(memories),
+      createTodoTools(todos),
       ...channels.all.flatMap((channel) =>
         channel.registerMcpTools ? [channel.registerMcpTools] : [],
       ),
@@ -169,9 +181,36 @@ export async function startApp(
 
     await reportInterrupted(queue, channels);
 
+    if (api) {
+      const endpoint = listen(config.api, () =>
+        startApiServer({
+          ...config.api,
+          admin,
+          scheduler,
+          queue,
+          sessions,
+          apiSessions,
+          hub,
+          todos,
+          memories,
+          info: {
+            name: "elseagent",
+            version: pkg.version,
+            model: threadOptions.model ?? null,
+            reasoningEffort: threadOptions.modelReasoningEffort ?? null,
+            workspace,
+            timezone,
+            channels: channels.all.map((channel) => channel.label),
+          },
+        }),
+      );
+      defer("API server", endpoint.stop);
+      console.log(`api: listening on ${endpoint.url}`);
+    }
+
     const onMessage = createMessageHandler({ scheduler, sessions });
 
-    for (const channel of channels.all) {
+    for (const channel of chatChannels) {
       signal.throwIfAborted();
       defer(channel.label, () => channel.stop());
       await channel.start(async (message, reply) => {
@@ -198,6 +237,21 @@ export async function startApp(
       }
     });
   });
+}
+
+const describeApi = ({ enabled, host, port, token }: ApiConfig) =>
+  enabled ? `http://${host}:${port}/api (${token ? "token required" : "no token"})` : "off";
+
+/** Start the API server; a port that can't be used is a config problem, said plainly. */
+function listen<T>({ host, port }: ApiConfig, start: () => T): T {
+  try {
+    return start();
+  } catch (err) {
+    throw new ConfigError(
+      `api: could not listen on ${host}:${port} (${(err as Error).message}). ` +
+        "Set api.port to a free port, or api.enabled to false.",
+    );
+  }
 }
 
 /** Run `task` now and then every `intervalMs`, until shutdown. */

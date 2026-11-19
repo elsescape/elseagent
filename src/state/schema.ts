@@ -157,3 +157,19 @@ export const todos = sqliteTable(
   },
   (t) => [index("todos_status_updated").on(t.status, t.updatedAt)],
 );
+
+/**
+ * Chat sessions opened through the HTTP API. Only what a session list needs: the conversation
+ * itself is `api:chat:<id>` in `sessions`, and its history is read back from Codex.
+ */
+export const apiSessions = sqliteTable(
+  "api_sessions",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull().default(""),
+    /** Unix epoch milliseconds. */
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [index("api_sessions_updated").on(t.updatedAt)],
+);

@@ -28,6 +28,16 @@
 # ELSEAGENT_SANDBOX_MODE takes precedence over the workspace-write default.
 # Omit apiKey to use CODEX_API_KEY, a saved login, or device-code login.
 
+# The HTTP API for dashboards and chat UIs, served at http://127.0.0.1:2923/api.
+# With a token, requests send it as a bearer token. Listening on anything other
+# than a loopback host (0.0.0.0 in a container) requires one.
+api:
+  enabled: true
+  host: 127.0.0.1
+  port: 2923
+  # token: REPLACE-ME-long-random-secret
+
+# Channels are optional when the API is enabled.
 channels:
   slack:
     botToken: xoxb-REPLACE-ME

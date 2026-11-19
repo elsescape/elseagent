@@ -2,6 +2,7 @@ import type {
   Codex,
   Input,
   Thread,
+  ThreadEvent,
   ThreadItem,
   ThreadOptions,
   TurnOptions,
@@ -68,6 +69,8 @@ export async function runStreamed(
   input: Input,
   options: TurnOptions,
   onItemStarted: (item: ThreadItem) => void,
+  /** Sees every event of the stream, as Codex sent it. */
+  onEvent?: (event: ThreadEvent) => void,
 ): Promise<{ finalResponse: string; usage: Usage | null }> {
   let finalResponse = "";
   let usage: Usage | null = null;
@@ -76,6 +79,7 @@ export async function runStreamed(
   try {
     const { events } = await thread.runStreamed(input, options);
     for await (const event of events) {
+      onEvent?.(event);
       if (event.type === "item.started") {
         if (["command_execution", "mcp_tool_call", "file_change"].includes(event.item.type)) {
           pending.set(event.item.id, { id: event.item.id, type: event.item.type });
@@ -117,6 +121,8 @@ export interface TurnDeps {
   /** Where each completed turn's token usage is recorded. */
   usage?: Pick<UsageStore, "record">;
   recovery?: Pick<RecoveryStore, "get" | "save" | "clear">;
+  /** Every Codex event of a turn, as it happens (the API streams them to chat UIs). */
+  onEvent?(message: QueuedMessage, event: ThreadEvent): void;
   now?: () => number;
   /** Download a file attached to a message in `chat` (see `Channel.download`). */
   download(chat: string, file: Attachment, dest: string, signal?: AbortSignal): Promise<void>;
@@ -456,6 +462,7 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
             const text = showStatus && describeItem(item);
             if (text) status.set(text);
           },
+          deps.onEvent && ((event) => deps.onEvent?.(message, event)),
         );
       };
       let result: Awaited<ReturnType<typeof runStreamed>>;

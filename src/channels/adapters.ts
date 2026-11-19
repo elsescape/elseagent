@@ -1,5 +1,4 @@
 import type { ChannelsConfig } from "../config/index.ts";
-import { Channels } from "./registry.ts";
 import { createSlackBot } from "./slack/index.ts";
 import { createTelegramBot } from "./telegram/index.ts";
 import type { Channel } from "./types.ts";
@@ -26,7 +25,11 @@ export function configuredChannelNames(config: ChannelsConfig): string[] {
   return adapters.filter((entry) => entry.enabled(config)).map((entry) => entry.name);
 }
 
-export async function connectChannels(config: ChannelsConfig, signal: AbortSignal) {
+/** Connect the configured chat services (none, when the agent is only reached over its API). */
+export async function connectChannels(
+  config: ChannelsConfig,
+  signal: AbortSignal,
+): Promise<Channel[]> {
   const connected: Channel[] = [];
   for (const entry of adapters) {
     signal.throwIfAborted();
@@ -34,5 +37,5 @@ export async function connectChannels(config: ChannelsConfig, signal: AbortSigna
     if (channel) connected.push(channel);
   }
   signal.throwIfAborted();
-  return new Channels(connected);
+  return connected;
 }

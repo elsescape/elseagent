@@ -56,7 +56,8 @@ Run `service install` again if those paths change.
 
 [.config.example.yaml](.config.example.yaml) lists every setting and doubles as the template
 for `elseagent init`. Fill in Slack, uncomment Telegram, or configure both. For Telegram
-alone, remove the Slack section.
+alone, remove the Slack section. With no channel at all, the agent is reached through its
+[HTTP API](#http-api) only.
 
 - **Agent** · Set its instructions with `prompt`, its working directory with `workspace`
   (default `~/workspace`), and the time zone for schedules with `timezone` (default system
@@ -67,6 +68,10 @@ alone, remove the Slack section.
   use Codex defaults unless overridden. Local installs default to `workspace-write`. The
   Docker images set `ELSEAGENT_SANDBOX_MODE=danger-full-access`, giving Codex full access
   inside the container.
+
+- **API** · The [HTTP API](#http-api) listens on `127.0.0.1:2923`. Change `api.host` and
+  `api.port`, set `api.token` to require a bearer token, or turn it off with
+  `api.enabled: false`. A host other than loopback requires a token.
 
 Use `elseagent init -o ./config.yaml` to write elsewhere and `-f` to overwrite. Use
 `elseagent run -c ./config.yaml` to select a file and `--dry-run` to check the config and
@@ -158,6 +163,71 @@ everyone who can talk to it.
 Records live in the agent's SQLite database, independent of Codex sessions. Updates use
 the last-read version to prevent one turn from overwriting another's changes.
 
+## HTTP API
+
+`elseagent run` serves an API under `http://127.0.0.1:2923/api` for dashboards and chat UIs.
+With `api.token` set, every request sends `Authorization: Bearer <token>`. Requests from a
+browser page on another origin are refused, so a UI on a different host or port needs a
+proxy. Bodies and responses are JSON, and errors are `{ "error": "..." }`.
+
+Agent state, read-only:
+
+| Endpoint                 | Returns                                                                    |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `GET /api/status`        | Version, model, workspace, channels, uptime, limits, running turns, counts |
+| `GET /api/queue`         | Messages waiting for a turn (`limit`)                                      |
+| `GET /api/conversations` | Conversations of every channel and their Codex threads (`limit`)           |
+| `GET /api/schedules`     | Scheduled tasks with their next and last runs                              |
+| `GET /api/usage`         | Token usage (`days` or `since`/`until`, `groupBy` day, user, channel…)     |
+| `GET /api/todos`         | Shared todos (`status` active, all, pending…; `limit`)                     |
+| `GET /api/memories`      | Shared memories (`q` to search, `limit`)                                   |
+
+Chat sessions, each a conversation with its own Codex session like a Slack thread:
+
+| Endpoint                          | Does                                                                 |
+| --------------------------------- | -------------------------------------------------------------------- |
+| `POST /api/sessions`              | Create a session; optional `title`                                   |
+| `GET /api/sessions`               | List sessions with `status` idle, queued or running                  |
+| `GET /api/sessions/:id`           | The session, its `history`, the `live` turn and a `cursor`           |
+| `PATCH /api/sessions/:id`         | Rename it (`title`)                                                  |
+| `DELETE /api/sessions/:id`        | Delete it; `409` while a turn is queued or running                   |
+| `POST /api/sessions/:id/messages` | Send `text` (optional `user`); `202` with `messageId`, `429` if full |
+| `POST /api/sessions/:id/stop`     | Stop the running turn                                                |
+| `GET /api/sessions/:id/events`    | Stream the session's events (server-sent events)                     |
+
+```bash
+curl -X POST localhost:2923/api/sessions
+curl -N localhost:2923/api/sessions/$ID/events &
+curl -X POST localhost:2923/api/sessions/$ID/messages \
+  -H 'content-type: application/json' -d '{"text": "What is in this workspace?"}'
+```
+
+Every event has a `type`, the `messageId` of the user message whose turn it belongs to,
+and a time `at`. A turn produces them in this order:
+
+| `type`         | Carries                                                                                                                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_message` | `text`, `user`                                                                                                                                                                                                            |
+| `turn_started` |                                                                                                                                                                                                                           |
+| `codex`        | `event`, a Codex SDK event as it is: `item.started`, `item.updated` and `item.completed` with reasoning, commands and their output, file changes, MCP tool calls and web searches, then `turn.completed` with token usage |
+| `status`       | `text`, a one-line summary such as "is running `bun test`…"; empty clears it                                                                                                                                              |
+| `reply`        | `text` (Markdown), `choices`, `files`                                                                                                                                                                                     |
+| `turn_ended`   | `status` completed, failed or interrupted                                                                                                                                                                                 |
+
+Codex's last `agent_message` item is the reply as JSON. Show the `reply` event instead: it is
+that message parsed, or a notice from elseagent such as a timeout.
+
+To show a session, load `GET /api/sessions/:id`, render `history` then `live`, and open the
+stream with `?after=<cursor>` so nothing is missed or repeated. A stream that reconnects
+with `Last-Event-ID` resumes where it stopped. Without either, a stream starts with the
+turns in progress.
+
+elseagent stores no transcripts. `history` is read back from Codex's own session files, so
+it survives restarts, and it is gone once cleanup deletes a session's Codex threads.
+Notices elseagent posted itself are not part of it. Live events are held in memory only
+while their turn runs. Attachments are not supported over the API yet, and reply `files`
+are paths on the agent's machine.
+
 ## Deployment
 
 | Image                                     | Included                                                                                     |
@@ -175,6 +245,8 @@ Both deployments mount the agent config at `/etc/elseagent/config.yaml` and pers
 `/home/elseagent` (workspace, Codex login and sessions, SQLite state, user-installed tools).
 Use [.env.example](.env.example) for optional tool credentials such as `GH_TOKEN`.
 The default container time zone is Asia/Singapore. Set `timezone` to change the default for schedules.
+To reach the [HTTP API](#http-api) from outside the container, set `api.host: 0.0.0.0` with
+an `api.token` and publish port 2923.
 
 ### Docker Compose
 
@@ -215,7 +287,8 @@ bun run db:generate           # After editing src/state/schema.ts
 
 Run `bun run lint` to apply formatting and lint fixes. Core code is in
 [src/agent](src/agent), channel adapters in [src/channels](src/channels), the MCP
-server in [src/mcp](src/mcp), and migrations in [drizzle](drizzle).
+server in [src/mcp](src/mcp), the HTTP API in [src/api](src/api), and migrations in
+[drizzle](drizzle).
 
 To add a channel, implement [`Channel`](src/channels/types.ts) and register its factory
 in [adapters.ts](src/channels/adapters.ts). Normalize incoming messages before handing

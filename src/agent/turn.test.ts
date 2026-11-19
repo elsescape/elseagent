@@ -384,6 +384,51 @@ describe("/new", () => {
   });
 });
 
+describe("Codex events", () => {
+  test("every event of a turn is handed to onEvent with its message", async () => {
+    const item: ThreadItem = { id: "r", type: "reasoning", text: "hm" };
+    const { codex } = fakeCodex(async () => json("done"), [item]);
+    const seen: [string, string][] = [];
+    const run = createTurnRunner({
+      codexFor: () => codex,
+      sessions: new SessionStore(openStateDb(":memory:")),
+      queue: { hasNewerPending: () => false },
+      threadOptions: {},
+      replyTo: () => ({
+        post: async () => undefined,
+        react: async () => {},
+        unreact: async () => {},
+        setStatus: async () => {},
+      }),
+      threadContext: async () => ({ messages: [], omitted: 0 }),
+      download: async () => {},
+      turnTimeoutMs: 1_000,
+      sessionIdleMs: 1_000,
+      onEvent: (message, event) => seen.push([message.text, event.type]),
+    });
+    await run(
+      {
+        id: 1,
+        conversationKey: "api:chat:s1",
+        channel: "api:chat",
+        ts: "m1",
+        threadTs: "s1",
+        user: "web",
+        text: "hello",
+        scheduleId: null,
+        mode: "direct",
+        files: [],
+      },
+      new AbortController().signal,
+    );
+    expect(seen).toEqual([
+      ["hello", "item.started"],
+      ["hello", "item.completed"],
+      ["hello", "turn.completed"],
+    ]);
+  });
+});
+
 describe("typing status", () => {
   test("shows what Codex is doing, then clears before the reply", async () => {
     const items = [

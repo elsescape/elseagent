@@ -16,6 +16,8 @@ export type Fetch = (input: string, init: RequestInit) => Promise<Response>;
 
 /** Prefix of Telegram channel IDs (`tg:<chat id>`); Slack IDs are used as they are. */
 export const TELEGRAM_PREFIX = "tg:";
+/** Prefix of the HTTP API's chat IDs (`api:chat`, see src/api/channel.ts). */
+export const API_PREFIX = "api:";
 
 /**
  * Commands a channel hands to the agent as message text: its slash commands and stop button
