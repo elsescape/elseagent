@@ -1,26 +1,20 @@
-# Build the base and full images for amd64 and arm64 and publish them to GitHub Container
-# Registry as ghcr.io/<owner>/elseagent-base:latest and ghcr.io/<owner>/elseagent-full:latest.
-# Only `latest` is kept: older versions are deleted after each publish. Build layers are cached
-# in ghcr.io/<owner>/elseagent-cache (one tag per image and architecture), so unchanged sections
-# of the Dockerfile are not rebuilt.
+# Publish multi-architecture images. Pushes to main update head, and stable
+# GitHub releases call this workflow to publish their version tag and latest.
 name: images
 
 on:
   push:
     branches: [main]
-    # Files that don't go into the images.
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "assets/**"
-      - "k8s/**"
-      - "compose.yaml"
-      - ".env.example"
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
   workflow_dispatch:
 
 concurrency:
-  group: images
-  cancel-in-progress: true
+  group: images-${{ inputs.release_tag && 'release' || 'head' }}
+  cancel-in-progress: ${{ !inputs.release_tag }}
 
 permissions:
   contents: read
@@ -28,9 +22,11 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
 
 jobs:
   build:
+    if: inputs.release_tag != '' || github.ref == 'refs/heads/main'
     name: build (${{ matrix.arch }})
     strategy:
       fail-fast: true
@@ -51,6 +47,14 @@ jobs:
           df -h /
 
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.sha }}
+
+      - name: Set the version from the release tag
+        if: inputs.release_tag != ''
+        run: |
+          jq --arg version "${RELEASE_TAG#v}" '.version = $version' package.json > package.json.new
+          mv package.json.new package.json
 
       - uses: docker/setup-buildx-action@v4
 
@@ -122,22 +126,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag latest (amd64 + arm64)
+      - name: Publish image tags (amd64 + arm64)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          tags=(head)
+          if [[ -n "$RELEASE_TAG" ]]; then
+            tags=("$RELEASE_TAG")
+            latest_release="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+            if [[ "$latest_release" == "$RELEASE_TAG" ]]; then
+              tags+=(latest)
+            fi
+          fi
+
           for image in base full; do
+            name="$REGISTRY/elseagent-$image"
             refs=()
             for digest in "digests/$image"/*; do
-              refs+=("$REGISTRY/elseagent-$image@sha256:$(basename "$digest")")
+              refs+=("$name@sha256:$(basename "$digest")")
             done
-            docker buildx imagetools create -t "$REGISTRY/elseagent-$image:latest" "${refs[@]}"
-            docker buildx imagetools inspect "$REGISTRY/elseagent-$image:latest"
+            destinations=()
+            for tag in "${tags[@]}"; do
+              destinations+=(-t "$name:$tag")
+            done
+            docker buildx imagetools create "${destinations[@]}" "${refs[@]}"
+            for tag in "${tags[@]}"; do
+              docker buildx imagetools inspect "$name:$tag"
+            done
           done
-
-      # Delete every version that is no longer tagged (previous builds and caches), keeping the
-      # per-architecture images that `latest` points to.
-      - name: Delete old versions
-        uses: dataaxiom/ghcr-cleanup-action@v1
-        with:
-          packages: elseagent-base,elseagent-full,elseagent-cache
-          delete-untagged: true
-          token: ${{ secrets.GITHUB_TOKEN }}
