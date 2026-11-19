@@ -13,7 +13,9 @@ import { buildThreadOptions, createCodex, deleteCodexThread, resolveCodexPath } 
 import { codexAuthStatus, ensureCodexLogin } from "./codex-login.ts";
 import { type Config, ConfigError } from "./config/index.ts";
 import { type AppLifecycle, runWithLifecycle } from "./lifecycle.ts";
+import { createMemoryTools } from "./mcp/memory-tools.ts";
 import { type McpEndpoint, startMcpServer } from "./mcp/server.ts";
+import { createTodoTools } from "./mcp/todo-tools.ts";
 import {
   MessageQueue,
   openStateDb,
@@ -21,6 +23,8 @@ import {
   SessionStore,
   UsageStore,
 } from "./state/index.ts";
+import { MemoryStore } from "./state/memory.ts";
+import { TodoStore } from "./state/todos.ts";
 import { DAY_MS, MINUTE_MS } from "./util/time.ts";
 
 export interface StartOptions {
@@ -142,9 +146,13 @@ export async function startApp(
       defaultTimezone: timezone,
     });
     // The elseagent tools, registered with every Codex turn (see buildCodexOptions).
-    const toolGroups = channels.all.flatMap((channel) =>
-      channel.registerMcpTools ? [channel.registerMcpTools] : [],
-    );
+    const toolGroups = [
+      createMemoryTools(new MemoryStore(db)),
+      createTodoTools(new TodoStore(db)),
+      ...channels.all.flatMap((channel) =>
+        channel.registerMcpTools ? [channel.registerMcpTools] : [],
+      ),
+    ];
     mcp = startMcpServer(
       admin,
       (turnId) => {

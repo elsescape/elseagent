@@ -1,12 +1,38 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStateDb } from "./db.ts";
+import { MemoryStore } from "./memory.ts";
 import { EMBEDDED_MIGRATIONS } from "./migrate.ts";
 import { MessageQueue, type NewQueuedMessage } from "./queue.ts";
 import { SessionStore } from "./sessions.ts";
+import { TodoStore } from "./todos.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
+
+test("agent memory and todos survive reopening its database", () => {
+  const dir = mkdtempSync(join(tmpdir(), "elseagent-memory-"));
+  try {
+    const path = join(dir, "agent.sqlite");
+    const source = { user: "U1", channel: "C1", conversationKey: "C1:1.0" };
+    {
+      const db = openStateDb(path);
+      using _client = db.$client;
+      new MemoryStore(db).upsert("release.language", "Chinese", undefined, source);
+      new TodoStore(db).create("Verify image tags", "", source);
+    }
+    const reopened = openStateDb(path);
+    using _client = reopened.$client;
+    expect(new MemoryStore(reopened).get("release.language")).toMatchObject({ content: "Chinese" });
+    expect(new TodoStore(reopened).list("active", 10)).toMatchObject([
+      { title: "Verify image tags" },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("migrations", () => {
   test("preserves old cron tasks and deleted schedule IDs when adding one-time tasks", () => {

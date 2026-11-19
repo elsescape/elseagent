@@ -16,7 +16,11 @@ import {
   SessionStore,
   UsageStore,
 } from "../state/index.ts";
+import { MemoryStore } from "../state/memory.ts";
+import { TodoStore } from "../state/todos.ts";
+import { createMemoryTools } from "./memory-tools.ts";
 import { type McpEndpoint, startMcpServer, TURN_HEADER } from "./server.ts";
+import { createTodoTools } from "./todo-tools.ts";
 
 // A running turn (id 1) in conversation C1:1.0, plus another one (id 2) that can be cancelled.
 const turns: RunningTurn[] = [1, 2].map((id) => ({
@@ -128,10 +132,15 @@ const registerSlackTools = createSlackTools(
 
 let endpoint: McpEndpoint;
 beforeAll(() => {
-  endpoint = startMcpServer(admin, callerFor, [registerSlackTools]);
+  endpoint = startMcpServer(admin, callerFor, [
+    createMemoryTools(new MemoryStore(db)),
+    createTodoTools(new TodoStore(db)),
+    registerSlackTools,
+  ]);
 });
 
 function callerFor(id: number): Caller | null {
+  if (id === 5) return { user: "42", channel: "tg:42", conversationKey: "tg:42:8", messageTs: "5" };
   if (id === 4) return { user: "U1", channel: "C1", conversationKey: "schedule:1:42" };
   if (id === 3)
     return {
@@ -190,11 +199,18 @@ describe("elseagent MCP server", () => {
       "general_schedule_run_now",
       "general_status",
       "general_usage",
+      "memory_delete",
+      "memory_get",
+      "memory_search",
+      "memory_upsert",
       "slack_post",
       "slack_read_channel",
       "slack_read_thread",
       "slack_search",
       "slack_thread_follow",
+      "todo_create",
+      "todo_list",
+      "todo_update",
     ]);
     await client.close();
   });
@@ -215,6 +231,92 @@ describe("elseagent MCP server", () => {
       }
     } finally {
       await server.stop();
+    }
+  });
+
+  test("shares memories across Slack and Telegram and rejects stale updates and deletes", async () => {
+    const slack = await connect(1);
+    const telegram = await connect(5);
+    const key = "release.report_language";
+    try {
+      const created = (
+        await callTool(slack, "memory_upsert", {
+          key,
+          content: "Write release reports in Chinese.",
+        })
+      ).json();
+      expect(created).toMatchObject({ key, updatedBy: "U1", sourceChannel: "C1" });
+      expect((await callTool(telegram, "memory_search", { query: "CHINESE" })).json()).toEqual([
+        created,
+      ]);
+      expect((await callTool(telegram, "memory_get", { key })).json()).toEqual(created);
+      expect((await callTool(telegram, "memory_upsert", { key, content: "French" })).isError).toBe(
+        true,
+      );
+      const updated = (
+        await callTool(telegram, "memory_upsert", {
+          key,
+          content: "发布报告使用中文。",
+          version: created.version,
+        })
+      ).json();
+      expect(updated).toMatchObject({
+        content: "发布报告使用中文。",
+        updatedBy: "42",
+        sourceChannel: "tg:42",
+      });
+      expect(updated.version).not.toBe(created.version);
+      expect(
+        (
+          await callTool(slack, "memory_upsert", {
+            key,
+            content: "Stale change",
+            version: created.version,
+          })
+        ).isError,
+      ).toBe(true);
+      expect(
+        (await callTool(slack, "memory_delete", { key, version: created.version })).isError,
+      ).toBe(true);
+      expect(
+        (await callTool(slack, "memory_delete", { key, version: updated.version })).json(),
+      ).toEqual({ key, deleted: true });
+      expect((await callTool(telegram, "memory_get", { key })).json()).toBeNull();
+    } finally {
+      await Promise.all([slack.close(), telegram.close()]);
+    }
+  });
+
+  test("creates a todo in one channel and completes it in another with version checks", async () => {
+    const slack = await connect(1);
+    const telegram = await connect(5);
+    try {
+      const created = (await callTool(slack, "todo_create", { title: "Verify image tags" })).json();
+      expect((await callTool(telegram, "todo_list")).json()).toEqual([created]);
+      expect(created).toMatchObject({ status: "pending", sourceChannel: "C1" });
+      const completed = (
+        await callTool(telegram, "todo_update", {
+          id: created.id,
+          status: "completed",
+          version: created.version,
+        })
+      ).json();
+      expect(completed).toMatchObject({ status: "completed", sourceChannel: "tg:42" });
+      expect(
+        (
+          await callTool(slack, "todo_update", {
+            id: created.id,
+            status: "cancelled",
+            version: created.version,
+          })
+        ).isError,
+      ).toBe(true);
+      expect((await callTool(slack, "todo_list")).json()).toEqual([]);
+      expect((await callTool(slack, "todo_list", { status: "completed" })).json()).toEqual([
+        completed,
+      ]);
+    } finally {
+      await Promise.all([slack.close(), telegram.close()]);
     }
   });
 

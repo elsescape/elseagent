@@ -143,6 +143,21 @@ the original timeout when no operation is awaiting a result. When a command, MCP
 or file change may have taken effect, it records the uncertainty in `stateDir/recovery/`
 for the next reply to reconcile. Turns interrupted by an agent restart are reported in chat.
 
+### Shared memory and todos
+
+Say “remember that release reports should be in Chinese” or “add a todo to check image tags
+before the next release.” The agent can look these up from Slack or Telegram, across topics,
+after `/new`, and after a restart. Records belong to the agent, so keep them suitable for
+everyone who can talk to it.
+
+- `memory_search` finds saved facts and preferences by keyword. `memory_get` reads a key,
+  and `memory_upsert` and `memory_delete` write or remove it.
+- `todo_create`, `todo_list`, and `todo_update` track work across sessions. The default list
+  shows pending and in-progress items. Use a scheduled task when you want a reminder.
+
+Records live in the agent's SQLite database, independent of Codex sessions. Updates use
+the last-read version to prevent one turn from overwriting another's changes.
+
 ## Deployment
 
 | Image                                     | Included                                                                                     |

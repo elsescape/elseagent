@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { Attachment } from "../channels/types.ts";
 
-// Only routing state lives here. Conversation history is kept by Codex itself.
+// Conversation history is kept by Codex itself.
 
 /** Maps a conversation (thread, or top-level DM) to the Codex thread holding its context. */
 export const sessions = sqliteTable(
@@ -124,4 +124,36 @@ export const codexThreads = sqliteTable(
     lastUsedAt: integer("last_used_at").notNull(),
   },
   (t) => [index("codex_threads_last_used").on(t.lastUsedAt)],
+);
+
+/** Long-lived facts and preferences shared by this agent's conversations. */
+export const memories = sqliteTable("memories", {
+  key: text("key").primaryKey(),
+  content: text("content").notNull(),
+  version: text("version").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  sourceChannel: text("source_channel").notNull(),
+  sourceConversation: text("source_conversation").notNull(),
+});
+
+export const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
+
+/** Tasks this agent can pick up in a later conversation. */
+export const todos = sqliteTable(
+  "todos",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    title: text("title").notNull(),
+    details: text("details").notNull().default(""),
+    status: text("status", { enum: TODO_STATUSES }).notNull().default("pending"),
+    version: text("version").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    updatedBy: text("updated_by").notNull(),
+    sourceChannel: text("source_channel").notNull(),
+    sourceConversation: text("source_conversation").notNull(),
+  },
+  (t) => [index("todos_status_updated").on(t.status, t.updatedAt)],
 );
