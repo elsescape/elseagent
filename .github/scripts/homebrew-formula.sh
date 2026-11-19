@@ -64,7 +64,7 @@ class Elseagent < Formula
   def caveats
     <<~EOS
       Install the Codex CLI and make it available on PATH.
-      Run elseagent init, configure Slack or Telegram in ~/.elseagent.yaml,
+      Run elseagent init, configure Slack or Telegram in ~/.elseagent/config.yml,
       then start the agent with elseagent run.
 
       Setup: https://github.com/${repo}/blob/main/docs/usage.md

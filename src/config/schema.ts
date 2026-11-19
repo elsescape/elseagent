@@ -2,7 +2,7 @@ import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import { z } from "zod";
 
 /** Shown as-is in help; expanded with `expandHome` before use. */
-export const DEFAULT_CONFIG_PATH = "~/.elseagent.yaml";
+export const DEFAULT_CONFIG_PATH = "~/.elseagent/config.yml";
 
 const REASONING_EFFORTS = [
   "minimal",

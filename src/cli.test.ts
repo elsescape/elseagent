@@ -7,7 +7,7 @@ import { CONFIG_TEMPLATE } from "./config/index.ts";
 const entry = join(import.meta.dir, "index.ts");
 
 /**
- * Run the CLI with HOME pointed at the test directory, so ~/.elseagent.yaml is isolated, and a
+ * Run the CLI with HOME pointed at the test directory, so ~/.elseagent/config.yml is isolated, and a
  * stand-in `codex` (logged in) first on PATH, so the real CLI is neither needed nor touched.
  */
 function run(args: string[], cwd: string) {
@@ -44,22 +44,22 @@ describe("cli", () => {
     expect(out).toMatch(/init \[options\]/);
   });
 
-  test("init writes ~/.elseagent.yaml by default", async () => {
+  test("init writes ~/.elseagent/config.yml by default", async () => {
     const res = run(["init"], dir);
     expect(res.code).toBe(0);
-    expect(await Bun.file(join(dir, ".elseagent.yaml")).text()).toBe(CONFIG_TEMPLATE);
+    expect(await Bun.file(join(dir, ".elseagent", "config.yml")).text()).toBe(CONFIG_TEMPLATE);
     expect(res.stdout).toContain("  elseagent run\n");
   });
 
-  test("run reads ~/.elseagent.yaml by default", async () => {
+  test("run reads ~/.elseagent/config.yml by default", async () => {
     await Bun.write(
-      join(dir, ".elseagent.yaml"),
+      join(dir, ".elseagent", "config.yml"),
       "channels:\n  slack:\n    botToken: a\n    appToken: b\n",
     );
     const res = run(["run", "--dry-run"], dir);
     expect(res.code).toBe(0);
-    expect(res.stdout).toMatch(new RegExp(`config: +${join(dir, ".elseagent.yaml")}\\n`));
-    await Bun.write(join(dir, ".elseagent.yaml"), CONFIG_TEMPLATE);
+    expect(res.stdout).toMatch(new RegExp(`config: +${join(dir, ".elseagent", "config.yml")}\\n`));
+    await Bun.write(join(dir, ".elseagent", "config.yml"), CONFIG_TEMPLATE);
   });
 
   test("-c and -o accept ~ paths", async () => {
@@ -81,7 +81,7 @@ describe("cli", () => {
   });
 
   test("run with -c reports validation errors", () => {
-    const res = run(["run"], dir);
+    const res = run(["run", "-c", "~/.elseagent/config.yml"], dir);
     expect(res.code).toBe(1);
     expect(res.stderr).toContain("channels.slack.botToken is still the placeholder");
   });

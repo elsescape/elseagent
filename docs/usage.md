@@ -3,9 +3,9 @@
 ## Running it
 
 ```bash
-elseagent init                               # write a minimal ~/.elseagent.yaml
+elseagent init                               # write a minimal ~/.elseagent/config.yml
 elseagent init -o ./agents/reviewer.yaml -f  # somewhere else, overwriting
-elseagent run                                # start with ~/.elseagent.yaml
+elseagent run                                # start with ~/.elseagent/config.yml
 elseagent run -c ./config.yaml               # another config
 elseagent run -c ./config.yaml --dry-run     # check config, codex and workspace, then exit
 ```

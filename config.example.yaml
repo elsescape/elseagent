@@ -1,4 +1,4 @@
-# elseagent configuration (default location: ~/.elseagent.yaml).
+# elseagent configuration (default location: ~/.elseagent/config.yml).
 # Only required settings are listed; every option and its default: docs/config.md
 # Channels: slack, telegram or both; each is turned on by its section (see docs/config.md).
 

@@ -40,7 +40,7 @@ elseagent init
 ```
 
 Install the Codex CLI separately, fill in the Slack or Telegram settings in
-`~/.elseagent.yaml`, then run `elseagent run`. Use `brew update && brew upgrade elseagent`
+`~/.elseagent/config.yml`, then run `elseagent run`. Use `brew update && brew upgrade elseagent`
 to update an existing Homebrew installation.
 
 **On Kubernetes**: put the tokens in [`k8s/elseagent.yaml`](k8s/elseagent.yaml) (full image,

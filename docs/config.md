@@ -1,8 +1,10 @@
 # Configuration
 
-elseagent reads a YAML file, `~/.elseagent.yaml` by default (`elseagent run -c <path>`
+elseagent reads a YAML file, `~/.elseagent/config.yml` by default (`elseagent run -c <path>`
 to use another). `elseagent init` writes a minimal one with only the required settings, the
-same as [`config.example.yaml`](../config.example.yaml).
+same as [`config.example.yaml`](../config.example.yaml). To keep using a config from an
+older installation, run `elseagent run -c ~/.elseagent.yaml`. If you move it to the new
+default location, update any relative paths to resolve from the new directory.
 
 Every option below is optional unless marked **required**. Leave out what you don't need; omitted
 options use their default. A missing or empty section behaves like an empty one. The agent's
