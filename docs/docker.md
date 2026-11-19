@@ -7,7 +7,7 @@ write anywhere in the container, but nothing outside it.
 | Image  | Published                                 | Contains                                                                                                                                                                                                |
 | ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `base` | `ghcr.io/elsescape/elseagent-base:latest` | Command-line tools: git/GitHub, C/C++, Python + uv (numpy, pandas), Go, Node.js, Bun, kubectl/Helm, Cloudflare CLIs, sops/age, crane, Postgres/MySQL/Redis clients, DuckDB, ImageMagick, ffmpeg, yt-dlp |
-| `full` | `ghcr.io/elsescape/elseagent-full:latest` | `base` + Chromium (Playwright), LibreOffice, pandoc, PDF tools, CJK/emoji fonts, Python/Node libraries for Office files and PDFs, ClickHouse (`clickhouse-client`, `clickhouse-local`) and chDB         |
+| `full` | `ghcr.io/elsescape/elseagent-full:latest` | `base` + Chromium (Playwright), LibreOffice, pandoc, PDF tools, CJK/emoji fonts, Python/Node libraries for Office files and PDFs, ClickHouse (`clickhouse-client`, `clickhouse-server`) and chDB         |
 
 The [`images` workflow](../.github/workflows/images.yml) builds both for `linux/amd64` and
 `linux/arm64` on every push to `main` and publishes them as `latest`; older versions are deleted,
@@ -28,7 +28,7 @@ about 4.8 GB (`base`) and 9 GB (`full`). Tool versions are pinned as `ARG`s at t
 | 5. Video                                | `yt-dlp` (YouTube, Bilibili, …) with Node as its JavaScript runtime, `ffmpeg`; `full` adds a browser                                                                                                                  |
 | 6. Office, websites, marketing (`full`) | LibreOffice (headless), `pandoc`, Playwright Chromium (HTML → PNG/PDF), fonts; Python: python-docx, python-pptx, openpyxl, xlsxwriter, pandas, matplotlib, reportlab, weasyprint, pypdf; Node: pptxgenjs, docx; `zip` |
 | 7. Anything else                        | passwordless `sudo apt-get install`, `uv pip install` / `uv tool install`, `npm i -g`, `go install`, `bun add -g`                                                                                                     |
-| 8. Databases and data                   | `psql`, `mariadb`, `redis-cli`; DuckDB (`duckdb`: SQL over CSV/Parquet/JSON), Miller (`mlr`: CSV/TSV); `full` adds ClickHouse (`clickhouse-client`, `clickhouse-local`) and chDB (Python)                             |
+| 8. Databases and data                   | `psql`, `mariadb`, `redis-cli`; DuckDB (`duckdb`: SQL over CSV/Parquet/JSON), Miller (`mlr`: CSV/TSV); `full` adds ClickHouse (`clickhouse-client`, `clickhouse-server`) and chDB (Python)                             |
 
 Python libraries live in the `/opt/tools` virtualenv, which is first on `PATH`, so plain
 `python` scripts can import them. Global Node packages resolve through `NODE_PATH`.

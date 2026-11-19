@@ -241,12 +241,12 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
 
 # --- 8. ClickHouse -------------------------------------------------------------------------
 # The single `clickhouse` binary (~500 MB, hence `full`): clickhouse-client for servers and
-# ClickHouse Cloud, clickhouse-local to run SQL over local or remote files, and a server for
-# tests. chDB (ClickHouse embedded in Python) is installed with the Python libraries below.
+# ClickHouse Cloud, and clickhouse-server for tests. chDB (ClickHouse embedded in Python)
+# is installed with the Python libraries below.
 RUN curl -fsSL "https://github.com/ClickHouse/ClickHouse/releases/download/v${CLICKHOUSE_VERSION}-stable/clickhouse-common-static-${CLICKHOUSE_VERSION}-${TARGETARCH}.tgz" \
       | tar -xz -C /usr/local/bin --strip-components=3 \
         "clickhouse-common-static-${CLICKHOUSE_VERSION}/usr/bin/clickhouse" \
-    && for tool in client local server; do ln -s clickhouse "/usr/local/bin/clickhouse-$tool"; done
+    && for tool in client server; do ln -s clickhouse "/usr/local/bin/clickhouse-$tool"; done
 
 # --- 6. Fonts ------------------------------------------------------------------------------
 # Chinese/Japanese/Korean and emoji, plus metric-compatible Office fonts (Arial/Times/
