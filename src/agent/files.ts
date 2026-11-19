@@ -1,5 +1,5 @@
-import { mkdir, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { mkdir, realpath, stat } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Attachment, OutgoingFile } from "../channels/types.ts";
 import { formatSize } from "../util/text.ts";
 
@@ -34,7 +34,7 @@ export function safeFileName(name: string): string {
 }
 
 /** `name`, or `name-1.ext`, `name-2.ext`… whichever doesn't exist yet in `dir`. */
-async function freePath(dir: string, name: string): Promise<string> {
+export async function freePath(dir: string, name: string): Promise<string> {
   const dot = name.lastIndexOf(".");
   const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
   for (let i = 0; ; i++) {
@@ -69,6 +69,11 @@ export async function saveAttachments(
     const info = { name: file.name, mimetype: file.mimetype, size: file.size };
     if (file.size !== undefined && file.size > MAX_ATTACHMENT_BYTES) {
       saved.push({ ...info, error: `larger than ${formatSize(MAX_ATTACHMENT_BYTES)}` });
+      continue;
+    }
+    if (file.path !== undefined) {
+      const exists = await Bun.file(file.path).exists();
+      saved.push(exists ? { ...info, path: file.path } : { ...info, error: "no longer there" });
       continue;
     }
     const path = await freePath(dir, safeFileName(file.name));
@@ -123,4 +128,18 @@ export async function resolveReplyFiles(
     } else files.push({ path, name: basename(path) });
   }
   return { files, problems };
+}
+
+/**
+ * `path` (absolute, or relative to `root`) as a real absolute path, if it is a file inside
+ * `root` once symlinks are followed; null otherwise.
+ */
+export async function fileWithin(root: string, path: string): Promise<string | null> {
+  try {
+    const [base, target] = await Promise.all([realpath(root), realpath(resolve(root, path))]);
+    if (target !== base && !target.startsWith(base + sep)) return null;
+    return (await stat(target)).isFile() ? target : null;
+  } catch {
+    return null; // not there
+  }
 }

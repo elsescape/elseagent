@@ -1,11 +1,11 @@
 import type { ThreadItem } from "@openai/codex-sdk";
-import type { SessionEvent, TurnStatus } from "../api/events.ts";
+import type { EventFile, SessionEvent, TurnStatus } from "../api/events.ts";
 
 /** What the chat shows, in order, built from a session's events. */
 export type Entry =
-  | { kind: "user"; key: string; text: string }
+  | { kind: "user"; key: string; text: string; files: EventFile[] }
   | { kind: "item"; key: string; item: ThreadItem; done: boolean }
-  | { kind: "reply"; key: string; text: string; choices: string[]; files: string[] }
+  | { kind: "reply"; key: string; text: string; choices: string[]; files: EventFile[] }
   | { kind: "ended"; key: string; status: Exclude<TurnStatus, "completed"> };
 
 export interface Timeline {
@@ -38,7 +38,7 @@ export function buildTimeline(events: readonly SessionEvent[]): Timeline {
     switch (event.type) {
       case "user_message":
         open.add(event.messageId);
-        entries.push({ kind: "user", key, text: event.text });
+        entries.push({ kind: "user", key, text: event.text, files: event.files });
         break;
       case "turn_started":
         open.add(event.messageId);
@@ -72,7 +72,7 @@ export function buildTimeline(events: readonly SessionEvent[]): Timeline {
           key,
           text: event.text,
           choices: event.choices,
-          files: event.files.map((f) => f.path),
+          files: event.files,
         });
         break;
       case "turn_ended":

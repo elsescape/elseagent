@@ -101,7 +101,9 @@ export async function startApp(
     // The HTTP API is a channel too: its chat sessions run through the same queue and turns.
     const hub = new EventHub();
     const apiSessions = new ApiSessionStore(db);
-    const api = config.api.enabled ? createApiChat({ hub, sessions: apiSessions }) : undefined;
+    const api = config.api.enabled
+      ? createApiChat({ hub, sessions: apiSessions, workspace })
+      : undefined;
     const channels = new Channels(api ? [...chatChannels, api.channel] : chatChannels);
     const sessions = new SessionStore(db);
     const queue = new MessageQueue(db);
@@ -185,6 +187,7 @@ export async function startApp(
       const endpoint = listen(config.api, () =>
         startApiServer({
           ...config.api,
+          workspace,
           admin,
           scheduler,
           queue,

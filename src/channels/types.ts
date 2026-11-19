@@ -42,6 +42,11 @@ export interface Attachment {
   size?: number;
   /** How the channel fetches it: a Slack download URL, a Telegram file_id. */
   ref: string;
+  /**
+   * Absolute path, when the file is already where it belongs and needs no download (uploads
+   * through the HTTP API are written straight into the conversation's attachments).
+   */
+  path?: string;
 }
 
 /** A file the agent sends along with a reply. */

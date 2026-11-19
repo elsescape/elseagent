@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Admin } from "../agent/admin.ts";
 import { Scheduler, stopReason } from "../agent/scheduler.ts";
 import { ScheduleRunner } from "../agent/schedules.ts";
@@ -48,13 +51,16 @@ function setup({
   const schedules = new ScheduleStore(db);
   const apiSessions = new ApiSessionStore(db);
   const hub = new EventHub();
-  const chat = createApiChat({ hub, sessions: apiSessions });
+  const workspace = mkdtempSync(join(tmpdir(), "elseagent-api-"));
+  const chat = createApiChat({ hub, sessions: apiSessions, workspace });
+  const received: QueuedMessage[] = [];
   const finishers = new Map<string, (outcome?: "fail") => void>();
   const stopped: string[] = [];
   const history: SessionEvent[] = [];
   const historyCalls: { threads: string[]; before?: number }[] = [];
 
   const run = async (message: QueuedMessage, signal: AbortSignal) => {
+    received.push(message);
     const reply = chat.channel.replyTo(message);
     chat.onCodexEvent(message, {
       type: "item.started",
@@ -79,7 +85,14 @@ function setup({
       await reply.post("The task failed.");
       await reply.react("failed");
     } else {
-      await reply.post(message.text.toUpperCase(), ["More"], [{ name: "a.txt", path: "/w/a.txt" }]);
+      const made = join(workspace, "out", "a.txt");
+      await Bun.write(made, "made by the agent");
+      const elsewhere = { name: "b.txt", path: "/elsewhere/b.txt" };
+      await reply.post(
+        message.text.toUpperCase(),
+        ["More"],
+        [{ name: "a.txt", path: made }, elsewhere],
+      );
     }
   };
   const scheduler = new Scheduler(queue, chat.observe(run), { maxConcurrent: 1, maxQueue });
@@ -101,6 +114,7 @@ function setup({
     host: "127.0.0.1",
     port: 0,
     token,
+    workspace,
     webui,
     admin,
     scheduler,
@@ -154,6 +168,8 @@ function setup({
     stopped,
     history,
     historyCalls,
+    workspace,
+    received,
   };
 }
 
@@ -370,7 +386,11 @@ describe("sessions", () => {
     expect(events[4]).toMatchObject({
       text: "HELLO THERE",
       choices: ["More"],
-      files: [{ name: "a.txt", path: "/w/a.txt" }],
+      // In the workspace: by its path there. Elsewhere: as it is.
+      files: [
+        { name: "a.txt", path: "out/a.txt" },
+        { name: "b.txt", path: "/elsewhere/b.txt" },
+      ],
     });
     expect(events[5]).toMatchObject({ status: "completed" });
     expect(ids).toEqual(events.map((e) => expect.stringMatching(new RegExp(`:${e.seq}$`))));
@@ -454,7 +474,7 @@ describe("sessions", () => {
     expect((await call("POST", "/sessions/nope/messages", { text: "hi" })).status).toBe(404);
     const empty = await call("POST", path, { text: "   " });
     expect(empty.status).toBe(400);
-    expect(await empty.json()).toEqual({ error: "text is required" });
+    expect(await empty.json()).toEqual({ error: "text or files is required" });
     expect((await call("POST", path, { text: "hi", user: "a b" })).status).toBe(400);
     const notJson = await fetch(base + path, { method: "POST", body: "{" });
     expect(notJson.status).toBe(415);
@@ -472,10 +492,145 @@ describe("sessions", () => {
   });
 });
 
+describe("files", () => {
+  const form = (...files: [name: string, content: string, type?: string][]) => {
+    const body = new FormData();
+    for (const [name, content, type] of files)
+      body.append("file", new File([content], name, { type }));
+    return body;
+  };
+
+  test("uploads are saved in the session's attachments and go with a message", async () => {
+    const { base, post, get, finish, workspace, received } = setup();
+    const { id } = await post("/sessions");
+    const upload = (body: FormData) =>
+      fetch(`${base}/sessions/${id}/files`, { method: "POST", body });
+    const res = await upload(form(["photo.png", "PNG", "image/png"], ["../../notes.txt", "hello"]));
+    expect(res.status).toBe(201);
+    const saved: Body = await res.json();
+    const dir = `attachments/api-chat-${id}`;
+    expect(saved).toEqual([
+      { name: "photo.png", path: `${dir}/photo.png`, size: 3, mimetype: "image/png" },
+      { name: "notes.txt", path: `${dir}/notes.txt`, size: 5, mimetype: "text/plain" },
+    ]);
+    expect(await Bun.file(join(workspace, dir, "notes.txt")).text()).toBe("hello");
+    // The same name again gets a name of its own.
+    const again: Body = await (await upload(form(["photo.png", "other"]))).json();
+    expect(again[0].path).toBe(`${dir}/photo-1.png`);
+
+    const paths = saved.map((f: { path: string }) => f.path);
+    const sent = await post(`/sessions/${id}/messages`, { files: paths });
+    expect(sent.status).toBe("started");
+    expect(received[0]).toMatchObject({
+      text: "",
+      files: [
+        {
+          name: "photo.png",
+          mimetype: "image/png",
+          size: 3,
+          path: join(workspace, dir, "photo.png"),
+        },
+        { name: "notes.txt", mimetype: "text/plain", size: 5 },
+      ],
+    });
+    const view = await get(`/sessions/${id}`);
+    expect(view.session.title).toBe("photo.png");
+    expect(view.live[0]).toMatchObject({
+      type: "user_message",
+      text: "",
+      files: [
+        { name: "photo.png", path: `${dir}/photo.png` },
+        { name: "notes.txt", path: `${dir}/notes.txt` },
+      ],
+    });
+    await finish("");
+  });
+
+  test("an upload must be files, not too many, and not empty", async () => {
+    const { base, post } = setup();
+    const { id } = await post("/sessions");
+    const upload = (body: BodyInit, headers: Record<string, string> = {}) =>
+      fetch(`${base}/sessions/${id}/files`, { method: "POST", body, headers });
+    const json = { "content-type": "application/json" };
+    expect((await upload("{}", json)).status).toBe(400);
+    const noFile = new FormData();
+    noFile.append("file", "just text");
+    expect((await upload(noFile)).status).toBe(400);
+    expect((await upload(form(["empty.txt", ""]))).status).toBe(400);
+    const many = form(...Array.from({ length: 11 }, (_, i): [string, string] => [`${i}.txt`, "x"]));
+    expect((await upload(many)).status).toBe(400);
+    const missing = await fetch(`${base}/sessions/nope/files`, {
+      method: "POST",
+      body: form(["a", "x"]),
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  test("a message can only attach what was uploaded to its session", async () => {
+    const { base, call, post, workspace } = setup();
+    const { id } = await post("/sessions");
+    const other = await post("/sessions");
+    await Bun.write(join(workspace, "secret.txt"), "workspace file");
+    const uploaded: Body = await (
+      await fetch(`${base}/sessions/${other.id}/files`, {
+        method: "POST",
+        body: form(["a.txt", "x"]),
+      })
+    ).json();
+    for (const path of [
+      "secret.txt",
+      "/etc/hosts",
+      "../outside",
+      uploaded[0].path,
+      "attachments",
+    ]) {
+      const res = await call("POST", `/sessions/${id}/messages`, { text: "hi", files: [path] });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as Body).error).toContain("not a file uploaded to this session");
+    }
+    const tooMany = Array.from({ length: 11 }, () => "x");
+    expect((await call("POST", `/sessions/${id}/messages`, { files: tooMany })).status).toBe(400);
+  });
+
+  test("workspace files are downloads, and nothing outside it is served", async () => {
+    const { base, call, workspace } = setup({ token: TOKEN });
+    await Bun.write(join(workspace, "out", "报告 final.html"), "<script>alert(1)</script>");
+    const res = await call("GET", `/files?path=${encodeURIComponent("out/报告 final.html")}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("<script>alert(1)</script>");
+    expect(res.headers.get("content-disposition")).toBe(
+      `attachment; filename*=UTF-8''${encodeURIComponent("报告 final.html")}`,
+    );
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+    // An absolute path inside the workspace is the same file.
+    const absolute = join(workspace, "out", "报告 final.html");
+    expect((await call("GET", `/files?path=${encodeURIComponent(absolute)}`)).status).toBe(200);
+
+    const outside = mkdtempSync(join(tmpdir(), "elseagent-outside-"));
+    await Bun.write(join(outside, "secret.txt"), "secret");
+    symlinkSync(join(outside, "secret.txt"), join(workspace, "link.txt"));
+    mkdirSync(join(workspace, "dir"));
+    const refused = [
+      "../secret.txt",
+      join(outside, "secret.txt"),
+      "link.txt",
+      "dir",
+      "nope.txt",
+      "/etc/hosts",
+    ];
+    for (const path of refused) {
+      expect((await call("GET", `/files?path=${encodeURIComponent(path)}`)).status).toBe(404);
+    }
+    expect((await call("GET", "/files")).status).toBe(400);
+    expect((await fetch(`${base}/files?path=out`)).status).toBe(401);
+  });
+});
+
 describe("the API channel", () => {
   test("a scheduled result opens a session of its own", async () => {
     const { get, hub, apiSessions } = setup();
-    const chat = createApiChat({ hub, sessions: apiSessions });
+    const chat = createApiChat({ hub, sessions: apiSessions, workspace: "/w" });
     expect(chat.channel.owns("api:chat")).toBe(true);
     expect(chat.channel.owns("C123")).toBe(false);
     expect(await chat.channel.ensureChannel("anything")).toBe("api:chat");
@@ -493,7 +648,7 @@ describe("the API channel", () => {
 
   test("a message from before a restart is announced when its turn starts", async () => {
     const { hub, apiSessions } = setup();
-    const chat = createApiChat({ hub, sessions: apiSessions });
+    const chat = createApiChat({ hub, sessions: apiSessions, workspace: "/w" });
     const session = apiSessions.create();
     const message: QueuedMessage = {
       id: 1,
@@ -505,13 +660,17 @@ describe("the API channel", () => {
       text: "still here",
       scheduleId: null,
       mode: "direct",
-      files: [],
+      files: [{ name: "a.png", ref: "/w/attachments/s/a.png", path: "/w/attachments/s/a.png" }],
     };
     const seen: LiveEvent[] = [];
     hub.subscribe(session.id, undefined, (e) => seen.push(e));
     await chat.observe(async () => {})(message, new AbortController().signal);
     expect(types(seen)).toEqual(["user_message", "turn_started", "turn_ended"]);
-    expect(seen[0]).toMatchObject({ text: "still here", user: "web" });
+    expect(seen[0]).toMatchObject({
+      text: "still here",
+      user: "web",
+      files: [{ name: "a.png", path: "attachments/s/a.png" }],
+    });
     // A scheduled run and other channels' turns are left alone.
     await chat.observe(async () => {})({ ...message, scheduleId: 3 }, new AbortController().signal);
     await chat.observe(async () => {})({ ...message, channel: "C1" }, new AbortController().signal);

@@ -20,7 +20,7 @@ const command = (status: "in_progress" | "completed"): ThreadItem => ({
 const FINAL = JSON.stringify({ reply: true, message: "Done.", choices: [], files: [] });
 
 const turn: SessionEvent[] = [
-  at("m1", { type: "user_message", text: "list files", user: "web" }),
+  at("m1", { type: "user_message", text: "list files", user: "web", files: [] }),
   at("m1", { type: "turn_started" }),
   at("m1", { type: "status", text: "is thinking…" }),
   at("m1", { type: "codex", event: { type: "turn.started" } }),
@@ -62,7 +62,7 @@ describe("buildTimeline", () => {
     expect(timeline.entries[3]).toMatchObject({
       text: "Done.",
       choices: ["More"],
-      files: ["/w/a.txt"],
+      files: [{ name: "a.txt", path: "/w/a.txt" }],
     });
   });
 
@@ -70,7 +70,7 @@ describe("buildTimeline", () => {
     const timeline = buildTimeline([
       ...turn,
       at("m1", { type: "turn_ended", status: "interrupted" }),
-      at("m2", { type: "user_message", text: "next", user: "web" }),
+      at("m2", { type: "user_message", text: "next", user: "web", files: [] }),
     ]);
     expect(timeline.entries.map((e) => e.kind)).toEqual(["user", "item", "item", "ended", "user"]);
     expect(timeline).toMatchObject({ busy: true, status: "" });

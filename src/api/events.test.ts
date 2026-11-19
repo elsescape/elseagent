@@ -4,7 +4,7 @@ import { EventHub, type LiveEvent } from "./events.ts";
 const types = (events: LiveEvent[]) => events.map((e) => `${e.messageId}:${e.type}`);
 
 function turn(hub: EventHub, session: string, id: string) {
-  hub.publish(session, id, { type: "user_message", text: id, user: "web" });
+  hub.publish(session, id, { type: "user_message", text: id, user: "web", files: [] });
   hub.publish(session, id, { type: "turn_started" });
 }
 const end = (hub: EventHub, session: string, id: string) =>
@@ -15,7 +15,7 @@ describe("EventHub", () => {
     const hub = new EventHub();
     expect(hub.live("s")).toEqual([]);
     turn(hub, "s", "m1");
-    hub.publish("s", "m2", { type: "user_message", text: "queued", user: "web" });
+    hub.publish("s", "m2", { type: "user_message", text: "queued", user: "web", files: [] });
     expect(types(hub.live("s"))).toEqual(["m1:user_message", "m1:turn_started", "m2:user_message"]);
     expect(hub.has("s", "m1")).toBe(true);
     end(hub, "s", "m1");
@@ -28,11 +28,11 @@ describe("EventHub", () => {
     let now = 100;
     const hub = new EventHub({ maxEvents: 2, now: () => now });
     expect(hub.runningSince("s")).toBeUndefined();
-    hub.publish("s", "m1", { type: "user_message", text: "one", user: "web" });
+    hub.publish("s", "m1", { type: "user_message", text: "one", user: "web", files: [] });
     expect(hub.runningSince("s")).toBeUndefined(); // queued, not running
     now = 200;
     hub.publish("s", "m1", { type: "turn_started" });
-    hub.publish("s", "m2", { type: "user_message", text: "two", user: "web" });
+    hub.publish("s", "m2", { type: "user_message", text: "two", user: "web", files: [] });
     now = 300;
     for (const text of ["a", "b", "c"]) hub.publish("s", "m1", { type: "status", text });
     expect(hub.live("s").some((e) => e.type === "turn_started")).toBe(false); // trimmed away

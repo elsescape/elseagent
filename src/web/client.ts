@@ -1,4 +1,4 @@
-import type { LiveEvent, SessionEvent } from "../api/events.ts";
+import type { EventFile, LiveEvent, SessionEvent } from "../api/events.ts";
 
 /** The browser's side of the HTTP API (see src/api/server.ts). */
 
@@ -38,21 +38,27 @@ const headers = (): Record<string, string> => {
   return token ? { authorization: `Bearer ${token}` } : {};
 };
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: {
-      ...headers(),
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+/** The JSON of a response, or the error it reports. */
+async function check<T>(res: Response): Promise<T> {
   if (res.status === 401) throw new Unauthorized();
   if (res.status === 404) throw new NotFound();
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `${method} ${path} failed (${res.status})`);
+  if (!res.ok) throw new Error(data.error ?? `the request failed (${res.status})`);
   return data as T;
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return check(
+    await fetch(`/api${path}`, {
+      method,
+      headers: {
+        ...headers(),
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+  );
 }
 
 export const api = {
@@ -62,8 +68,23 @@ export const api = {
   create: () => request<Session>("POST", "/sessions", {}),
   rename: (id: string, title: string) => request<Session>("PATCH", `/sessions/${id}`, { title }),
   remove: (id: string) => request<void>("DELETE", `/sessions/${id}`),
-  send: (id: string, text: string) =>
-    request<unknown>("POST", `/sessions/${id}/messages`, { text }),
+  send: (id: string, text: string, files: string[] = []) =>
+    request<unknown>("POST", `/sessions/${id}/messages`, { text, files }),
+  /** Save files in the session's attachments; their paths go with the next message. */
+  upload: async (id: string, files: File[]): Promise<EventFile[]> => {
+    const body = new FormData();
+    for (const file of files) body.append("file", file);
+    return check(
+      await fetch(`/api/sessions/${id}/files`, { method: "POST", headers: headers(), body }),
+    );
+  },
+  /** A workspace file's content. (A link can't carry the bearer token; `fetch` can.) */
+  file: async (path: string): Promise<Blob> => {
+    const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: headers() });
+    if (res.status === 401) throw new Unauthorized();
+    if (!res.ok) throw new NotFound();
+    return res.blob();
+  },
   stop: (id: string) => request<unknown>("POST", `/sessions/${id}/stop`, {}),
 };
 

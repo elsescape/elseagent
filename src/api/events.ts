@@ -2,10 +2,13 @@ import type { ThreadEvent } from "@openai/codex-sdk";
 
 export type TurnStatus = "completed" | "failed" | "interrupted";
 
-/** A file the agent sent with a reply. */
-export interface ReplyFile {
+/** A file attached to a message or sent with a reply. */
+export interface EventFile {
   name: string;
-  /** Absolute path on the agent's machine. */
+  /**
+   * Where it is: relative to the agent's workspace, from which `GET /api/files` serves it, or
+   * absolute when the agent put it somewhere else (it can't be downloaded then).
+   */
   path: string;
 }
 
@@ -18,11 +21,11 @@ export interface ReplyFile {
  * message parsed, or a notice from elseagent itself (a timeout, a stop).
  */
 export type SessionEventBody =
-  | { type: "user_message"; text: string; user: string }
+  | { type: "user_message"; text: string; user: string; files: EventFile[] }
   | { type: "turn_started" }
   | { type: "codex"; event: ThreadEvent }
   | { type: "status"; text: string }
-  | { type: "reply"; text: string; choices: string[]; files: ReplyFile[] }
+  | { type: "reply"; text: string; choices: string[]; files: EventFile[] }
   | { type: "turn_ended"; status: TurnStatus };
 
 export type SessionEvent = SessionEventBody & {
