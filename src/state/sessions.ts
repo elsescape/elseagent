@@ -229,6 +229,17 @@ export class SessionStore {
       .all();
   }
 
+  /** Every Codex thread a conversation has used and that still exists, oldest first. */
+  threadsOf(conversationKey: string): string[] {
+    return this.db
+      .select({ threadId: codexThreads.threadId })
+      .from(codexThreads)
+      .where(eq(codexThreads.conversationKey, conversationKey))
+      .orderBy(codexThreads.lastUsedAt)
+      .all()
+      .map((r) => r.threadId);
+  }
+
   /** The Codex thread was deleted from Codex's storage: stop tracking it. */
   dropThread(threadId: string): void {
     this.db.delete(codexThreads).where(eq(codexThreads.threadId, threadId)).run();

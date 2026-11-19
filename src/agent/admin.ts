@@ -1,4 +1,4 @@
-import { TELEGRAM_PREFIX } from "../channels/types.ts";
+import { API_PREFIX, TELEGRAM_PREFIX } from "../channels/types.ts";
 import type {
   MessageQueue,
   Schedule,
@@ -122,7 +122,8 @@ export class Admin {
    * (only answer mentions). Defaults to the caller's conversation.
    */
   threadFollow(follow: boolean, caller: Caller, conversation = caller.conversationKey): string {
-    if (!conversation.includes(":") || conversation.startsWith(TELEGRAM_PREFIX)) {
+    const elsewhere = [TELEGRAM_PREFIX, API_PREFIX].some((p) => conversation.startsWith(p));
+    if (!conversation.includes(":") || elsewhere) {
       throw new AdminError("Only Slack channel threads can be followed or muted.");
     }
     this.deps.sessions.mute(conversation, !follow);
@@ -220,7 +221,9 @@ export class Admin {
     if (!this.deps.scheduleRunner.runNow(schedule)) throw new AdminError("The queue is full.");
     const where = schedule.channel.startsWith(TELEGRAM_PREFIX)
       ? "a new topic of the Telegram chat"
-      : `<#${schedule.channel}>`;
+      : schedule.channel.startsWith(API_PREFIX)
+        ? "a new session of the web chat"
+        : `<#${schedule.channel}>`;
     return `Queued a run of schedule #${id} "${schedule.name}"; its result is posted in ${where}.`;
   }
 

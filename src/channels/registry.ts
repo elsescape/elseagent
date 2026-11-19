@@ -1,8 +1,8 @@
 import type { Attachment, Channel, Reply, ReplyTarget, ThreadContext } from "./types.ts";
 
 /**
- * The connected channels (Slack, Telegram), used as one: each call goes to the channel that owns
- * the chat ID involved.
+ * The connected channels (Slack, Telegram, the HTTP API), used as one: each call goes to the
+ * channel that owns the chat ID involved.
  */
 export class Channels {
   readonly stateKey: string;

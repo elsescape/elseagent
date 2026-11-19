@@ -1,6 +1,6 @@
 # Default location for elseagent init and run is ~/.elseagent/config.yml.
+# It works as it is: the agent then serves its web chat and API on this machine.
 # Uncomment optional settings to override their defaults.
-# Configure Slack, Telegram, or both. Remove the Slack section for Telegram-only use.
 
 # Role and instructions appended to the agent's built-in instructions.
 # prompt: "You are the on-call assistant."
@@ -28,16 +28,31 @@
 # ELSEAGENT_SANDBOX_MODE takes precedence over the workspace-write default.
 # Omit apiKey to use CODEX_API_KEY, a saved login, or device-code login.
 
-channels:
-  slack:
-    botToken: xoxb-REPLACE-ME
-    appToken: xapp-REPLACE-ME
-    # Public channels to join by name or ID. Invite the bot to private channels.
-    # join: [ops]
-    # auto follows threads after a mention or result. mention requires a mention.
-    # threadReplies: auto
+# The HTTP API for dashboards and chat UIs, served at http://127.0.0.1:2923/api.
+# With a token, requests send it as a bearer token. Listening on anything other
+# than a loopback host (0.0.0.0 in a container) requires one.
+api:
+  enabled: true
+  host: 127.0.0.1
+  port: 2923
+  # token: REPLACE-ME-long-random-secret
+  # The web chat, served at http://127.0.0.1:2923/ from the same port.
+  webui: true
 
-  # Telegram handles private chats. Send /start to the bot to learn your user ID.
-  # telegram:
-  #   botToken: "123456789:REPLACE-ME"
-  #   allowedUsers: [123456789]
+# Chat services are optional. Without one, the agent is used through the web chat
+# and the API. Uncomment Slack, Telegram, or both, and fill in the tokens.
+#
+# For Slack, list public channels to join in `join`, by name or ID, and invite the bot
+# to private ones. With threadReplies auto it follows a thread after a mention or a
+# result; with mention it only answers mentions.
+#
+# Telegram handles private chats. Send /start to the bot to learn your user ID.
+# channels:
+#   slack:
+#     botToken: xoxb-REPLACE-ME
+#     appToken: xapp-REPLACE-ME
+#     join: [ops]
+#     threadReplies: auto
+#   telegram:
+#     botToken: "123456789:REPLACE-ME"
+#     allowedUsers: [123456789]

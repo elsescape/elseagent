@@ -119,17 +119,31 @@ export const codexHome = (env: Record<string, string | undefined> = process.env)
 
 const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Whether Codex still has a saved session (rollout file) for a thread. */
-export async function hasRollout(threadId: string, home = codexHome()): Promise<boolean> {
-  const glob = new Bun.Glob(`**/rollout-*-${threadId}.jsonl*`);
+/**
+ * The file Codex keeps a thread's history in (its rollout), or null when it has none. A
+ * compressed archive counts with `anyFormat`; only plain `.jsonl` can be read as it is.
+ */
+export async function rolloutPath(
+  threadId: string,
+  home = codexHome(),
+  anyFormat = false,
+): Promise<string | null> {
+  if (!THREAD_ID.test(threadId)) return null;
+  const glob = new Bun.Glob(`**/rollout-*-${threadId}.jsonl${anyFormat ? "*" : ""}`);
   for (const dir of ["sessions", "archived_sessions"]) {
     try {
-      for await (const _ of glob.scan({ cwd: join(home, dir), onlyFiles: true })) return true;
+      const cwd = join(home, dir);
+      for await (const file of glob.scan({ cwd, onlyFiles: true })) return join(cwd, file);
     } catch {
       // no such directory
     }
   }
-  return false;
+  return null;
+}
+
+/** Whether Codex still has a saved session (rollout file) for a thread. */
+export async function hasRollout(threadId: string, home = codexHome()): Promise<boolean> {
+  return (await rolloutPath(threadId, home, true)) !== null;
 }
 
 /**

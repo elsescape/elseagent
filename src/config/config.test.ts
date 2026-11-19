@@ -26,25 +26,31 @@ async function writeConfig(name: string, content: string): Promise<string> {
 }
 
 describe("loadConfig", () => {
-  test("loads the template once tokens are filled in", async () => {
-    const filled = CONFIG_TEMPLATE.replace("xoxb-REPLACE-ME", "xoxb-1").replace(
-      "xapp-REPLACE-ME",
-      "xapp-1",
-    );
-    const config = await loadConfig(await writeConfig("filled.yaml", filled));
-    expect(config.channels.slack).toEqual({
-      botToken: "xoxb-1",
-      appToken: "xapp-1",
-      join: [],
-      threadReplies: "auto",
-    });
+  test("loads the template as it is: the API and web chat, no chat service", async () => {
+    const config = await loadConfig(await writeConfig("template.yaml", CONFIG_TEMPLATE));
+    expect(config.channels).toEqual({});
+    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923, webui: true });
     expect(config.maxConcurrent).toBe(32);
     expect(config.codex).toEqual({});
   });
 
-  test("rejects the unfilled template with a clear message", async () => {
-    const path = await writeConfig("template.yaml", CONFIG_TEMPLATE);
-    const err = await loadConfig(path).catch((e) => e);
+  test("loads Slack once its section is uncommented and the tokens filled in", async () => {
+    const filled = CONFIG_TEMPLATE.replace("# channels:", "channels:")
+      .replace("#   slack:", "  slack:")
+      .replace("#     botToken: xoxb-REPLACE-ME", "    botToken: xoxb-1")
+      .replace("#     appToken: xapp-REPLACE-ME", "    appToken: xapp-1");
+    const config = await loadConfig(await writeConfig("filled.yaml", filled));
+    expect(config.channels).toEqual({
+      slack: { botToken: "xoxb-1", appToken: "xapp-1", join: [], threadReplies: "auto" },
+    });
+  });
+
+  test("rejects placeholder tokens with a clear message", async () => {
+    const unfilled = CONFIG_TEMPLATE.replace("# channels:", "channels:")
+      .replace("#   slack:", "  slack:")
+      .replace("#     botToken:", "    botToken:")
+      .replace("#     appToken:", "    appToken:");
+    const err = await loadConfig(await writeConfig("unfilled.yaml", unfilled)).catch((e) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect(err.message).toContain("channels.slack.botToken is still the placeholder");
     expect(err.message).toContain("channels.slack.appToken is still the placeholder");
@@ -55,10 +61,45 @@ describe("loadConfig", () => {
     const err = await loadConfig(empty).catch((e) => e);
     expect(err.message).toContain("channels.slack.botToken is required");
     expect(err.message).toContain("channels.slack.appToken is required");
-    const none = await writeConfig("no-channel.yaml", "maxConcurrent: 2\n");
+    const off = "api:\n  enabled: false\n";
+    const none = await writeConfig("no-channel.yaml", off);
     expect(loadConfig(none)).rejects.toThrow("configure at least one channel");
-    const emptySection = await writeConfig("empty-slack.yaml", "channels:\n  slack:\n");
+    const emptySection = await writeConfig("empty-slack.yaml", `${off}channels:\n  slack:\n`);
     expect(loadConfig(emptySection)).rejects.toThrow("configure at least one channel");
+  });
+
+  test("the api is on by default and is enough without a channel", async () => {
+    const config = await loadConfig(await writeConfig("api-only.yaml", "maxConcurrent: 2\n"));
+    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923, webui: true });
+    expect(config.channels).toEqual({});
+  });
+
+  test("the api needs a token to listen beyond this machine", async () => {
+    const open = await writeConfig("api-open.yaml", "api:\n  host: 0.0.0.0\n");
+    expect(loadConfig(open)).rejects.toThrow("api.token is required when api.host is not");
+    const short = await writeConfig("api-short.yaml", "api:\n  token: secret\n");
+    expect(loadConfig(short)).rejects.toThrow("api.token must be at least 16 characters");
+    const port = await writeConfig("api-port.yaml", "api:\n  port: 70000\n");
+    expect(loadConfig(port)).rejects.toThrow("api.port must be between 1 and 65535");
+    const guarded = await writeConfig(
+      "api-token.yaml",
+      "api:\n  host: 0.0.0.0\n  port: 8080\n  token: 0123456789abcdef\n",
+    );
+    expect((await loadConfig(guarded)).api).toEqual({
+      enabled: true,
+      host: "0.0.0.0",
+      port: 8080,
+      token: "0123456789abcdef",
+      webui: true,
+    });
+    const plain = await writeConfig("api-plain.yaml", "api:\n  webui: false\n");
+    expect((await loadConfig(plain)).api.webui).toBe(false);
+    // Off, it is not checked.
+    const disabled = await writeConfig(
+      "api-off.yaml",
+      'api:\n  enabled: false\n  host: 0.0.0.0\nchannels:\n  telegram:\n    botToken: "1:a"\n',
+    );
+    expect((await loadConfig(disabled)).api.enabled).toBe(false);
   });
 
   test("telegram alone is enough; allowedUsers are kept as strings", async () => {
@@ -213,9 +254,9 @@ describe(".config.example.yaml", () => {
     expect(example).toContain(DEFAULT_CONFIG_PATH);
   });
 
-  test("only enables Slack credentials by default", () => {
+  test("only enables the local API and web chat by default", () => {
     expect(Bun.YAML.parse(CONFIG_TEMPLATE)).toEqual({
-      channels: { slack: { botToken: `xoxb-${PLACEHOLDER}`, appToken: `xapp-${PLACEHOLDER}` } },
+      api: { enabled: true, host: "127.0.0.1", port: 2923, webui: true },
     });
   });
 
@@ -227,6 +268,7 @@ describe(".config.example.yaml", () => {
       codex: example.codex,
       "channels.slack": (example.channels as Record<string, unknown>).slack,
       "channels.telegram": (example.channels as Record<string, unknown>).telegram,
+      api: example.api,
     };
     for (const [section, schema] of Object.entries(configSections)) {
       const sample = sections[section as keyof typeof sections] as Record<string, unknown>;
@@ -236,5 +278,6 @@ describe(".config.example.yaml", () => {
     const config = await loadConfig(path);
     expect(config.channels.telegram?.allowedUsers).toEqual(["123456789"]);
     expect(config.channels.slack?.join).toEqual(["ops"]);
+    expect(config.api.token).toBe("123-long-random-secret");
   });
 });

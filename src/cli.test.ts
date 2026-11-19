@@ -80,8 +80,19 @@ describe("cli", () => {
     expect(await Bun.file(out).exists()).toBe(true);
   });
 
-  test("run with -c reports validation errors", () => {
-    const res = run(["run", "-c", "~/.elseagent/config.yml"], dir);
+  test("the generated config is valid as it is", () => {
+    const res = run(["run", "-c", "~/.elseagent/config.yml", "--dry-run"], dir);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toMatch(/channels: +\(none\)\n/);
+    expect(res.stdout).toMatch(/api: +http:\/\/127\.0\.0\.1:2923\/api \(no token, web chat on\)\n/);
+  });
+
+  test("run with -c reports validation errors", async () => {
+    await Bun.write(
+      join(dir, "placeholder.yaml"),
+      "channels:\n  slack:\n    botToken: xoxb-REPLACE-ME\n    appToken: b\n",
+    );
+    const res = run(["run", "-c", "placeholder.yaml"], dir);
     expect(res.code).toBe(1);
     expect(res.stderr).toContain("channels.slack.botToken is still the placeholder");
   });
