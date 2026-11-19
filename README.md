@@ -99,8 +99,9 @@ or `!unmute` for a thread, or set `channels.slack.threadReplies: mention` global
 native Stop button or `!stop` aborts the active turn. Use `/new` in a DM to start over.
 
 For an existing app, sync the manifest's file scopes (`files:read`, `files:write`) and
-Stop settings (`agent_view`, `assistant:write`, `agent_session_stopped`), then reinstall
-the app and refresh Slack. Switching from `assistant_view` to `agent_view` is irreversible.
+agent settings (`agent_view`, `assistant:write`, and the `agent_session_stopped` and
+`app_home_opened` events), then reinstall the app and refresh Slack. Switching from
+`assistant_view` to `agent_view` is irreversible.
 
 The Slack tools can read channel history and thread replies where the bot is a member.
 Private channels and DMs can only be read while answering a message there. To enable

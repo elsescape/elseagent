@@ -220,6 +220,8 @@ export async function createSlackBot(
         if (topLevelDmSessions.get(event.channel) === event.thread_ts) message.threadTs = undefined;
         await dispatch(message);
       });
+      // Slack's agent view wants this subscription. Nothing to do when someone opens the DM.
+      app.event("app_home_opened", async () => {});
       // `/new` in a DM starts it over; it goes through the queue like a message (no ts: there
       // is no Slack message behind a slash command). Elsewhere, explain where it works.
       app.command("/new", async ({ ack, command }) => {
