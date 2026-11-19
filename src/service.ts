@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { DEFAULT_CONFIG_PATH, expandHome, loadConfig } from "./config/index.ts";
 
 const unit = "elseagent.service";
-const label = "com.elseagent.agent";
+const label = "com.elsescape.elseagent";
 
 type ServiceAction = "install" | "uninstall" | "status" | "logs" | "start" | "restart" | "stop";
 

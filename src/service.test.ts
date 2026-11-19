@@ -25,7 +25,7 @@ if [ "${name}" = launchctl ]; then
   case "$1" in
     bootstrap) touch "$HOME/loaded";;
     bootout) unlink "$HOME/loaded";;
-    print) case "$2" in */com.elseagent.agent) test -f "$HOME/loaded";; esac;;
+    print) case "$2" in */com.elsescape.elseagent) test -f "$HOME/loaded";; esac;;
   esac
 fi
 `,
@@ -69,7 +69,7 @@ fi
           home,
           isLinux
             ? "xdg/systemd/user/elseagent.service"
-            : "Library/LaunchAgents/com.elseagent.agent.plist",
+            : "Library/LaunchAgents/com.elsescape.elseagent.plist",
         ),
       );
       const contents = await definition.text();
@@ -96,7 +96,7 @@ fi
         expect(trace).toContain("journalctl --user-unit elseagent.service --no-pager -n 100");
         expect(trace).toContain("journalctl --user-unit elseagent.service --no-pager -n 100 -f");
       } else {
-        const target = `gui/${uid}/com.elseagent.agent`;
+        const target = `gui/${uid}/com.elsescape.elseagent`;
         expect(trace).toContain(`launchctl enable ${target}`);
         expect(trace).toContain(`launchctl print ${target}`);
         expect(trace).toContain(`launchctl kickstart -k ${target}`);
