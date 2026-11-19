@@ -5,7 +5,7 @@
 A [Codex](https://github.com/openai/codex) agent for Slack and Telegram. Ask it to work
 in a thread or DM, share files, or run a task on a schedule.
 
-[Install](#local-installation) · [Configuration](#configuration) · [Slack](#slack) ·
+[Install](#local-installation) · [User service](#run-as-a-user-service) · [Configuration](#configuration) · [Slack](#slack) ·
 [Telegram](#telegram) · [Usage](#usage) · [Deployment](#deployment) · [Development](#development)
 
 ## Local installation
@@ -23,6 +23,34 @@ Use `brew update && brew upgrade elseagent` to upgrade. Builds are also availabl
 
 On startup, Codex uses an API key or a saved login. If neither is available, open
 the device sign-in link from the logs and enter the code.
+
+## Run as a user service
+
+After configuring the local CLI, run these commands as the account that will run elseagent:
+
+```bash
+elseagent service install                      # uses ~/.elseagent/config.yml
+elseagent service install -c /path/config.yaml  # use a different config
+elseagent service status
+elseagent service logs
+elseagent service logs -f
+elseagent service stop
+elseagent service start
+elseagent service restart
+elseagent service uninstall
+```
+
+Installation starts the service immediately. On Linux, it enables the systemd user unit
+and enables lingering for the current account so the service starts at boot before login.
+The system's logind policy must allow the account to enable lingering. Uninstall leaves
+lingering enabled because it applies to the whole account.
+
+On macOS, install from a signed-in desktop session. The LaunchAgent starts at the user's
+next login after a reboot. Its combined stdout and stderr are written to
+`~/Library/Logs/elseagent/service.log`. On Linux, logs go to the journal.
+
+The service saves the executable, config path, and current `PATH` at installation.
+Run `service install` again if those paths change.
 
 ## Configuration
 
