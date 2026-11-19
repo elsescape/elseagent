@@ -1,3 +1,5 @@
+import type { ToolGroup } from "../mcp/tools.ts";
+
 /**
  * The interface every channel (Slack, Telegram) implements. Messages, replies and schedules carry
  * a `channel` string, the chat ID within a channel: a Slack channel or DM ID, or `tg:<chat id>`.
@@ -146,6 +148,8 @@ export interface IncomingChannel {
 export interface Channel extends IncomingChannel {
   /** Stable, filename-safe identity used when this is the agent's primary channel. */
   readonly stateKey: string;
+  /** Channel-specific MCP tools, registered only while this adapter is enabled. */
+  readonly registerMcpTools?: ToolGroup;
   /** What Codex is told about conversations in this channel (formatting, threads, schedules). */
   instructions: string;
   /** Whether a chat ID (a message's `channel`) belongs to this channel. */

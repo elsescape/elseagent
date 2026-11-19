@@ -114,16 +114,18 @@ Ask for one-time or recurring work in plain language. For example, “remind me 
 error-only check with no findings stays silent. Posted results open a Slack thread or
 Telegram topic you can follow up in. A failed check produces a brief notification.
 
-- `schedule_create` takes an ISO 8601 timestamp with a UTC offset (`at`) or a recurring
+- `general_schedule_create` takes an ISO 8601 timestamp with a UTC offset (`at`) or a recurring
   `cron`. Up to 50 active schedules are supported, with a 5-minute minimum recurrence.
   Overdue schedules run once after restart. A full queue records the occurrence as skipped.
-- Other schedule tools are `schedule_list`, `schedule_delete` and `schedule_run_now`.
+- Other schedule tools are `general_schedule_list`, `general_schedule_delete` and `general_schedule_run_now`.
   A manual run preserves the next automatic occurrence.
-- Built-in MCP tools also cover status (`status`, `usage`), queue and sessions
-  (`list_queue`, `remove_queued`, `list_sessions`, `forget_session`, `cancel_turn`,
-  `thread_follow`), and `cleanup` for idle sessions and their files. Cleanup can preview
+- Built-in MCP tools also cover status (`general_status`, `general_usage`), queue and sessions
+  (`general_list_queue`, `general_remove_queued`, `general_list_sessions`, `general_forget_session`, `general_cancel_turn`), and `general_cleanup` for idle sessions and their files. Cleanup can preview
   what will be deleted and preserves usage records. Users who can talk to the agent can ask
   it to use these tools.
+- Slack exposes `slack_thread_follow` only when the Slack adapter is enabled. Telegram
+  currently uses the shared `general_*` tools. Other integrations can register their own
+  tool groups with a distinct prefix, such as `gmail_*` or `workspace_*`.
 
 If Codex's event stream breaks, the runner can continue the saved session once within
 the original timeout when no operation is awaiting a result. When a command, MCP call,

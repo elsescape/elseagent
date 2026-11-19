@@ -8,6 +8,7 @@ import { Admin, type Caller } from "../agent/admin.ts";
 import { Cleanup } from "../agent/cleanup.ts";
 import type { RunningTurn } from "../agent/scheduler.ts";
 import { ScheduleRunner } from "../agent/schedules.ts";
+import { registerSlackTools } from "../channels/slack/tools.ts";
 import {
   MessageQueue,
   openStateDb,
@@ -77,23 +78,25 @@ const admin = new Admin({
 
 let endpoint: McpEndpoint;
 beforeAll(() => {
-  endpoint = startMcpServer(admin, (id): Caller | null => {
-    const turn = turns.find((t) => t.message.id === id);
-    return turn
-      ? {
-          user: turn.message.user,
-          channel: turn.message.channel,
-          conversationKey: turn.message.conversationKey,
-        }
-      : null;
-  });
+  endpoint = startMcpServer(admin, callerFor, [registerSlackTools]);
 });
+
+function callerFor(id: number): Caller | null {
+  const turn = turns.find((t) => t.message.id === id);
+  return turn
+    ? {
+        user: turn.message.user,
+        channel: turn.message.channel,
+        conversationKey: turn.message.conversationKey,
+      }
+    : null;
+}
 afterAll(() => endpoint.stop());
 
-async function connect(turnId: number, token = endpoint.token) {
+async function connect(turnId: number, token = endpoint.token, server = endpoint) {
   const client = new Client({ name: "test", version: "1" });
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(endpoint.url), {
+    new StreamableHTTPClientTransport(new URL(server.url), {
       requestInit: { headers: { authorization: `Bearer ${token}`, [TURN_HEADER]: String(turnId) } },
     }),
   );
@@ -117,21 +120,40 @@ describe("elseagent MCP server", () => {
     const client = await connect(1);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      "cancel_turn",
-      "cleanup",
-      "forget_session",
-      "list_queue",
-      "list_sessions",
-      "remove_queued",
-      "schedule_create",
-      "schedule_delete",
-      "schedule_list",
-      "schedule_run_now",
-      "status",
-      "thread_follow",
-      "usage",
+      "general_cancel_turn",
+      "general_cleanup",
+      "general_forget_session",
+      "general_list_queue",
+      "general_list_sessions",
+      "general_remove_queued",
+      "general_schedule_create",
+      "general_schedule_delete",
+      "general_schedule_list",
+      "general_schedule_run_now",
+      "general_status",
+      "general_usage",
+      "slack_thread_follow",
     ]);
     await client.close();
+  });
+
+  test("omits Slack tools when the Slack adapter did not register them", async () => {
+    const server = startMcpServer(admin, callerFor);
+    try {
+      const client = await connect(1, server.token, server);
+      try {
+        const { tools } = await client.listTools();
+        expect(tools).toHaveLength(12);
+        expect(tools.every((tool) => tool.name.startsWith("general_"))).toBe(true);
+        expect((await callTool(client, "slack_thread_follow", { follow: false })).isError).toBe(
+          true,
+        );
+      } finally {
+        await client.close();
+      }
+    } finally {
+      await server.stop();
+    }
   });
 
   test("status shows running turns, queue and limits", async () => {
@@ -145,7 +167,7 @@ describe("elseagent MCP server", () => {
     });
     sessions.touch("C1:1.0", "thread-a", "1.0");
     const client = await connect(1);
-    const status = (await callTool(client, "status")).json();
+    const status = (await callTool(client, "general_status")).json();
     expect(status.running.map((r: { conversation: string }) => r.conversation)).toEqual([
       "C1:1.0",
       "C1:2.0",
@@ -154,16 +176,18 @@ describe("elseagent MCP server", () => {
     expect(status).toMatchObject({ queued: 1, sessions: 1, schedules: 0 });
     expect(status.limits.maxConcurrent).toBe(16);
 
-    const queued = (await callTool(client, "list_queue")).json();
+    const queued = (await callTool(client, "general_list_queue")).json();
     expect(queued[0]).toMatchObject({ position: 1, conversation: "D9", text: "waiting" });
     await client.close();
   });
 
   test("cancel_turn stops another conversation's turn, as the caller, but not its own", async () => {
     const client = await connect(1);
-    expect((await callTool(client, "cancel_turn", { conversation: "C1:2.0" })).isError).toBe(false);
+    expect(
+      (await callTool(client, "general_cancel_turn", { conversation: "C1:2.0" })).isError,
+    ).toBe(false);
     expect(cancelled).toContainEqual(["C1:2.0", "U1"]);
-    const self = await callTool(client, "cancel_turn", { conversation: "C1:1.0" });
+    const self = await callTool(client, "general_cancel_turn", { conversation: "C1:1.0" });
     expect(self).toMatchObject({ isError: true });
     expect(self.text).toContain("can't cancel itself");
     await client.close();
@@ -172,7 +196,7 @@ describe("elseagent MCP server", () => {
   test("schedule_create defaults to the caller's channel, or joins the named one", async () => {
     const client = await connect(1);
     const here = (
-      await callTool(client, "schedule_create", {
+      await callTool(client, "general_schedule_create", {
         name: "Here",
         cron: "0 9 * * *",
         prompt: "check",
@@ -181,7 +205,7 @@ describe("elseagent MCP server", () => {
     expect(here).toMatchObject({ channel: "C1", createdBy: "U1", timezone: "UTC" });
 
     const ops = (
-      await callTool(client, "schedule_create", {
+      await callTool(client, "general_schedule_create", {
         name: "Ops",
         cron: "0 9 * * 1-5",
         prompt: "check CI",
@@ -193,14 +217,14 @@ describe("elseagent MCP server", () => {
     expect(ops.nextRun).toMatch(/09:00 \(Asia\/Shanghai\)$/);
     expect(ensured).toContain("#ops");
 
-    const bad = await callTool(client, "schedule_create", {
+    const bad = await callTool(client, "general_schedule_create", {
       name: "x",
       cron: "* * * * *",
       prompt: "p",
     });
     expect(bad.isError).toBe(true);
     expect(bad.text).toContain("more often");
-    const privateCh = await callTool(client, "schedule_create", {
+    const privateCh = await callTool(client, "general_schedule_create", {
       name: "x",
       cron: "0 9 * * *",
       prompt: "p",
@@ -208,10 +232,14 @@ describe("elseagent MCP server", () => {
     });
     expect(privateCh.text).toContain("invite me");
 
-    expect((await callTool(client, "schedule_list")).json()).toHaveLength(2);
-    expect((await callTool(client, "schedule_delete", { id: here.id })).text).toContain("Deleted");
-    expect((await callTool(client, "schedule_list")).json()).toHaveLength(1);
-    expect((await callTool(client, "schedule_run_now", { id: ops.id })).text).toContain("Queued");
+    expect((await callTool(client, "general_schedule_list")).json()).toHaveLength(2);
+    expect((await callTool(client, "general_schedule_delete", { id: here.id })).text).toContain(
+      "Deleted",
+    );
+    expect((await callTool(client, "general_schedule_list")).json()).toHaveLength(1);
+    expect((await callTool(client, "general_schedule_run_now", { id: ops.id })).text).toContain(
+      "Queued",
+    );
     await client.close();
   });
 
@@ -219,7 +247,7 @@ describe("elseagent MCP server", () => {
     const client = await connect(1);
     const at = new Date(Date.now() + 60 * 60_000).toISOString();
     const reminder = (
-      await callTool(client, "schedule_create", {
+      await callTool(client, "general_schedule_create", {
         name: "Reminder",
         at,
         prompt: "Send a reminder",
@@ -227,34 +255,34 @@ describe("elseagent MCP server", () => {
     ).json();
     expect(reminder).toMatchObject({ name: "Reminder", cron: null, channel: "C1" });
     expect(reminder.nextRun).toMatch(/\(UTC\)$/);
-    await callTool(client, "schedule_delete", { id: reminder.id });
+    await callTool(client, "general_schedule_delete", { id: reminder.id });
     await client.close();
   });
 
   test("forget_session and remove_queued", async () => {
     const client = await connect(1);
-    expect((await callTool(client, "forget_session", { conversation: "C1:1.0" })).isError).toBe(
-      false,
-    );
-    expect((await callTool(client, "forget_session", { conversation: "C1:1.0" })).isError).toBe(
-      true,
-    );
-    const [first] = (await callTool(client, "list_queue")).json();
-    expect((await callTool(client, "remove_queued", { id: first.id })).isError).toBe(false);
-    expect((await callTool(client, "list_queue")).json()).toEqual([]);
+    expect(
+      (await callTool(client, "general_forget_session", { conversation: "C1:1.0" })).isError,
+    ).toBe(false);
+    expect(
+      (await callTool(client, "general_forget_session", { conversation: "C1:1.0" })).isError,
+    ).toBe(true);
+    const [first] = (await callTool(client, "general_list_queue")).json();
+    expect((await callTool(client, "general_remove_queued", { id: first.id })).isError).toBe(false);
+    expect((await callTool(client, "general_list_queue")).json()).toEqual([]);
     await client.close();
   });
 
   test("thread_follow mutes and unmutes the caller's thread (or another one)", async () => {
     const client = await connect(1);
-    const off = await callTool(client, "thread_follow", { follow: false });
+    const off = await callTool(client, "slack_thread_follow", { follow: false });
     expect(off.text).toContain("Stopped following C1:1.0");
     expect(sessions.followState("C1:1.0")?.muted).toBe(true);
-    await callTool(client, "thread_follow", { follow: true });
+    await callTool(client, "slack_thread_follow", { follow: true });
     expect(sessions.followState("C1:1.0")?.muted).toBe(false);
-    await callTool(client, "thread_follow", { follow: false, conversation: "C1:2.0" });
+    await callTool(client, "slack_thread_follow", { follow: false, conversation: "C1:2.0" });
     expect(sessions.followState("C1:2.0")?.muted).toBe(true);
-    const dm = await callTool(client, "thread_follow", { follow: false, conversation: "D1" });
+    const dm = await callTool(client, "slack_thread_follow", { follow: false, conversation: "D1" });
     expect(dm.isError).toBe(true);
     await client.close();
   });
@@ -278,7 +306,7 @@ describe("elseagent MCP server", () => {
     turn("2026-11-10T23:00:00Z", "U2", 200, 20);
     turn("2026-11-11T08:00:00Z", "U1", 300, 30);
     const client = await connect(1);
-    const res = await callTool(client, "usage", {
+    const res = await callTool(client, "general_usage", {
       since: "2026-11-10",
       until: "2026-11-11",
       groupBy: "day",
@@ -294,13 +322,13 @@ describe("elseagent MCP server", () => {
         { day: "2026-11-11", turns: 1, totalTokens: 330 },
       ],
     });
-    expect((await callTool(client, "usage", { since: "nope" })).isError).toBe(true);
+    expect((await callTool(client, "general_usage", { since: "nope" })).isError).toBe(true);
     await client.close();
   });
 
   test("cleanup counts on a dry run", async () => {
     const client = await connect(1);
-    const res = (await callTool(client, "cleanup", { dryRun: true })).json();
+    const res = (await callTool(client, "general_cleanup", { dryRun: true })).json();
     expect(res).toMatchObject({ dryRun: true, olderThanDays: 30, sessions: 0, codexThreads: 0 });
     expect(deletedThreads).toEqual([]);
     await client.close();

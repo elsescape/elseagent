@@ -26,6 +26,7 @@ import {
   slashCommandMessage,
   stopButtonMessage,
 } from "./message.ts";
+import { registerSlackTools } from "./tools.ts";
 
 /** Slack's limit for `markdown_text` is 12,000 characters; stay under it. */
 export const SLACK_MARKDOWN_LIMIT = 11_000;
@@ -176,6 +177,7 @@ export async function createSlackBot(
     platform: "slack",
     label: `slack @${identity.name} (${identity.userId})`,
     stateKey: `${identity.teamId}-${identity.userId}`,
+    registerMcpTools: registerSlackTools,
     instructions: SLACK_INSTRUCTIONS,
     identity,
     // Slack keeps its existing bare IDs and names. Other adapters can use namespaced IDs.

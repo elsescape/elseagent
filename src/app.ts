@@ -142,12 +142,19 @@ export async function startApp(
       defaultTimezone: timezone,
     });
     // The elseagent tools, registered with every Codex turn (see buildCodexOptions).
-    mcp = startMcpServer(admin, (turnId) => {
-      const turn = scheduler.runningTurns().find((t) => t.message.id === turnId);
-      if (!turn) return null;
-      const { user, channel, conversationKey } = turn.message;
-      return { user, channel, conversationKey };
-    });
+    const toolGroups = channels.all.flatMap((channel) =>
+      channel.registerMcpTools ? [channel.registerMcpTools] : [],
+    );
+    mcp = startMcpServer(
+      admin,
+      (turnId) => {
+        const turn = scheduler.runningTurns().find((t) => t.message.id === turnId);
+        if (!turn) return null;
+        const { user, channel, conversationKey } = turn.message;
+        return { user, channel, conversationKey };
+      },
+      toolGroups,
+    );
 
     defer("MCP server", mcp.stop);
     defer("scheduler", () => scheduler.stop());
