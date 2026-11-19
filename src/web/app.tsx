@@ -29,6 +29,7 @@ import {
   SheetContent,
 } from "./components/ui/dialog.tsx";
 import { Composer } from "./composer.tsx";
+import { isPicture, type Pending } from "./files.tsx";
 import { BlockView } from "./messages.tsx";
 import { SidebarContent } from "./sidebar.tsx";
 import { useTheme } from "./theme.ts";
@@ -129,6 +130,7 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [following, setFollowing] = useState(true);
+  const [pending, setPending] = useState<Pending[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
 
   /** Run an API call; a missing token asks for one, anything else is shown. */
@@ -214,18 +216,58 @@ function App() {
     if (el) setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_PX);
   };
 
+  const clearPending = () =>
+    setPending((files) => {
+      for (const p of files) if (p.preview) URL.revokeObjectURL(p.preview);
+      return [];
+    });
+
   const select = (id: string | null) => {
     setActiveId(id);
     setMenuOpen(false);
+    clearPending(); // they were uploaded to the session being left
   };
 
-  const send = async (text: string) => {
-    if (!text.trim()) return;
+  /** The session messages go to: the open one, or a new one for a first message. */
+  const ensureSession = async () => {
     const id = activeId ?? (await attempt(api.create))?.id;
+    if (id) setActiveId(id);
+    return id;
+  };
+
+  /** Upload files as soon as they are picked, so sending the message doesn't wait for them. */
+  const attach = async (files: File[]) => {
+    const picked = files.map(
+      (file): Pending => ({
+        key: crypto.randomUUID(),
+        file,
+        preview: isPicture(file.name) ? URL.createObjectURL(file) : undefined,
+      }),
+    );
+    setPending((now) => [...now, ...picked]);
+    const update = (key: string, change: Partial<Pending>) =>
+      setPending((now) => now.map((p) => (p.key === key ? { ...p, ...change } : p)));
+    const id = await ensureSession();
+    for (const { key, file } of picked) {
+      try {
+        if (!id) throw new Error("no session to upload to");
+        const [saved] = await api.upload(id, [file]);
+        update(key, saved ? { path: saved.path } : { error: "The upload was not saved" });
+      } catch (err) {
+        if (err instanceof Unauthorized) return setLocked(true);
+        update(key, { error: (err as Error).message });
+      }
+    }
+  };
+
+  const send = async (text: string, files = pending) => {
+    const paths = files.flatMap((p) => (p.path ? [p.path] : []));
+    if (!text.trim() && paths.length === 0) return;
+    const id = await ensureSession();
     if (!id) return;
-    setActiveId(id);
     setFollowing(true);
-    await attempt(() => api.send(id, text.trim()));
+    clearPending();
+    await attempt(() => api.send(id, text.trim(), paths));
     void refresh();
   };
 
@@ -267,6 +309,9 @@ function App() {
   const composer = (
     <Composer
       busy={timeline.busy}
+      pending={pending}
+      onAttach={attach}
+      onRemove={(key) => setPending((now) => now.filter((p) => p.key !== key))}
       onSend={send}
       onStop={() => activeId && void attempt(() => api.stop(activeId))}
     />
@@ -345,7 +390,11 @@ function App() {
             <div ref={scroller} onScroll={onScroll} className="flex-1 overflow-y-auto">
               <div className="mx-auto max-w-3xl space-y-5 px-4 pt-2 pb-8">
                 {blocks.map((block) => (
-                  <BlockView key={block.key} block={block} onChoice={send} />
+                  <BlockView
+                    key={block.key}
+                    block={block}
+                    onChoice={(choice) => send(choice, [])}
+                  />
                 ))}
                 {timeline.busy && (
                   <div className="text-sm">

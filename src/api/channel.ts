@@ -1,3 +1,4 @@
+import { basename, isAbsolute, relative } from "node:path";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { stopReason, type TurnRunner } from "../agent/scheduler.ts";
 import {
@@ -10,7 +11,7 @@ import {
 import type { ApiSessionStore } from "../state/api-sessions.ts";
 import type { QueuedMessage } from "../state/index.ts";
 import { truncate } from "../util/text.ts";
-import type { EventHub } from "./events.ts";
+import type { EventFile, EventHub } from "./events.ts";
 
 /**
  * The one chat of the API channel. A session is a thread of it, so its conversation key is
@@ -29,6 +30,8 @@ export const API_INSTRUCTIONS = `This conversation is in elseagent's web chat, w
 
 The user sees your commands, tool calls and file changes as you work, so do not repeat them in your reply.
 
+The user can attach files and images to a message. They can download the files you send back only from inside your working directory, so write anything you put in "files" there.
+
 Scheduled results open a new session in the web chat (leave \`channel\` out to use it); the user follows up in that session.`;
 
 /** The session a queued message belongs to; null for a scheduled run, which has none yet. */
@@ -45,13 +48,23 @@ export interface ApiChat {
   onCodexEvent(message: QueuedMessage, event: ThreadEvent): void;
 }
 
+/** A file as events name it: by its path in the workspace when it is inside. */
+export function eventFile(path: string, workspace: string): EventFile {
+  const inside = relative(workspace, path);
+  const outside = inside.startsWith("..") || isAbsolute(inside);
+  return { name: basename(path), path: outside ? path : inside };
+}
+
 export function createApiChat({
   hub,
   sessions,
+  workspace,
   label = "api",
 }: {
   hub: EventHub;
   sessions: Pick<ApiSessionStore, "create" | "touch">;
+  /** Codex's working directory; files in events are named relative to it. */
+  workspace: string;
   label?: string;
 }): ApiChat {
   /** Messages whose turn is running, and whether it reported a failure (the "failed" reaction). */
@@ -68,7 +81,7 @@ export function createApiChat({
           // Elsewhere `<@id>` is a mention; here it would be read as an HTML tag and dropped.
           text: markdown.replace(/<@([^>\s]+)>/g, "@$1"),
           choices,
-          files: files.map(({ name, path }) => ({ name, path })),
+          files: files.map((file) => eventFile(file.path, workspace)),
         });
         sessions.touch(sessionId);
         return sessionId;
@@ -108,7 +121,8 @@ export function createApiChat({
       // After a restart the message comes from the queue, and nothing has announced it here.
       if (!hub.has(sessionId, message.ts)) {
         const { text, user } = message;
-        hub.publish(sessionId, message.ts, { type: "user_message", text, user });
+        const files = message.files.flatMap((f) => (f.path ? [eventFile(f.path, workspace)] : []));
+        hub.publish(sessionId, message.ts, { type: "user_message", text, user, files });
       }
       hub.publish(sessionId, message.ts, { type: "turn_started" });
       failed.set(message.ts, false);

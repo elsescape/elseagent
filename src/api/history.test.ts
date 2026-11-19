@@ -92,6 +92,7 @@ describe("rolloutEvents", () => {
       type: "user_message",
       text: "fix the bug",
       user: "web",
+      files: [],
       messageId: "t1",
       at: T0 + 3000,
     });
@@ -140,6 +141,37 @@ describe("rolloutEvents", () => {
       text: "Run the nightly check",
       user: "",
     });
+  });
+
+  test("files listed under a user message become its files", () => {
+    clock = 0;
+    const listed = [
+      "<@web>: compare these\nand [attached file: not this one]",
+      "[attached file: attachments/api-chat-s1/a (1).png (image/png, 12 KB)]",
+      "[attached file: attachments/api-chat-s1/notes.txt]",
+    ].join("\n");
+    const [message] = rolloutEvents(
+      [event("task_started", { turn_id: "t1" }), said(listed)].join("\n"),
+    );
+    expect(message).toMatchObject({
+      text: "compare these\nand [attached file: not this one]",
+      user: "web",
+      files: [
+        { name: "a (1).png", path: "attachments/api-chat-s1/a (1).png" },
+        { name: "notes.txt", path: "attachments/api-chat-s1/notes.txt" },
+      ],
+    });
+    // Files alone, and a file that could not be saved (it has no path to offer).
+    clock = 0;
+    const only = rolloutEvents(
+      [
+        event("task_started", { turn_id: "t1" }),
+        said("<@web>: \n[attached file: attachments/x/a.png (image/png, 1 KB)]"),
+        said("<@web>: hi\n[attached file b.png: could not be downloaded (gone)]"),
+      ].join("\n"),
+    );
+    expect(only[0]).toMatchObject({ text: "", files: [{ name: "a.png" }] });
+    expect(only[2]).toMatchObject({ text: expect.stringContaining("could not be"), files: [] });
   });
 
   test("leaves out turns that started at or after `before`", () => {

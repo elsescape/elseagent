@@ -90,3 +90,24 @@ describe("resolveReplyFiles", () => {
     expect(problems).toHaveLength(1);
   });
 });
+
+test("saveAttachments leaves a file that is already in place where it is", async () => {
+  const dir = tmp();
+  const here = join(dir, "here.png");
+  await Bun.write(here, "PNG");
+  const gone = join(dir, "gone.png");
+  const saved = await saveAttachments(
+    [
+      { name: "here.png", mimetype: "image/png", size: 3, ref: here, path: here },
+      { name: "gone.png", ref: gone, path: gone },
+    ],
+    join(dir, "attachments"),
+    async () => {
+      throw new Error("nothing to download");
+    },
+  );
+  expect(saved).toEqual([
+    { name: "here.png", mimetype: "image/png", size: 3, path: here },
+    { name: "gone.png", mimetype: undefined, size: undefined, error: "no longer there" },
+  ]);
+});

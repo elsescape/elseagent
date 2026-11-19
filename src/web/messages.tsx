@@ -10,13 +10,13 @@ import {
   Globe,
   ListTodo,
   LoaderCircle,
-  Paperclip,
   Terminal,
   Wrench,
 } from "lucide-react";
 import { marked } from "marked";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
+import { FileList } from "./files.tsx";
 import { cn } from "./lib/utils.ts";
 import { type Block, summarizeSteps } from "./timeline.ts";
 
@@ -248,8 +248,13 @@ export function BlockView({ block, onChoice }: { block: Block; onChoice: (text: 
   switch (block.kind) {
     case "user":
       return (
-        <div className="ml-auto w-fit max-w-[85%] rounded-3xl rounded-br-lg bg-secondary px-4 py-2.5 text-[0.9375rem] leading-relaxed whitespace-pre-wrap break-words sm:max-w-[75%]">
-          {block.text}
+        <div className="flex flex-col items-end gap-2">
+          <FileList files={block.files} className="max-w-[85%] justify-end sm:max-w-[75%]" />
+          {block.text && (
+            <div className="w-fit max-w-[85%] rounded-3xl rounded-br-lg bg-secondary px-4 py-2.5 text-[0.9375rem] leading-relaxed whitespace-pre-wrap break-words sm:max-w-[75%]">
+              {block.text}
+            </div>
+          )}
         </div>
       );
     case "steps":
@@ -258,20 +263,7 @@ export function BlockView({ block, onChoice }: { block: Block; onChoice: (text: 
       return (
         <div className="group/reply space-y-3">
           <Markdown text={block.text} />
-          {block.files.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {block.files.map((file) => (
-                <span
-                  key={file}
-                  title={file}
-                  className="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground"
-                >
-                  <Paperclip className="size-3" />
-                  {baseName(file)}
-                </span>
-              ))}
-            </div>
-          )}
+          <FileList files={block.files} />
           {block.choices.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {block.choices.map((choice) => (

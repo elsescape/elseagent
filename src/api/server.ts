@@ -1,23 +1,38 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 import type { BunRequest, Server } from "bun";
 import { z } from "zod";
 import { type Admin, AdminError } from "../agent/admin.ts";
+import {
+  attachmentsDir,
+  fileWithin,
+  freePath,
+  MAX_ATTACHMENT_BYTES,
+  safeFileName,
+} from "../agent/files.ts";
 import type { Scheduler } from "../agent/scheduler.ts";
 import { USAGE_GROUPS } from "../agent/usage.ts";
+import type { Attachment } from "../channels/types.ts";
 import type { ApiSession, ApiSessionStore } from "../state/api-sessions.ts";
 import type { MessageQueue, SessionStore } from "../state/index.ts";
 import type { MemoryStore } from "../state/memory.ts";
 import { TODO_STATUSES, type TodoStore } from "../state/todos.ts";
+import { formatSize } from "../util/text.ts";
 import webui from "../web/index.html";
-import { API_CHAT, apiConversationKey, titleFrom } from "./channel.ts";
+import { API_CHAT, apiConversationKey, eventFile, titleFrom } from "./channel.ts";
 import type { EventHub, LiveEvent, SessionEvent } from "./events.ts";
 import { type HistoryOptions, threadHistory } from "./history.ts";
 
 /** Who a message is from when the client doesn't say. */
 export const DEFAULT_USER = "web";
 const MAX_MESSAGE_CHARS = 100_000;
-/** Room for the longest message in any encoding; nothing else is sent to the API. */
-const MAX_BODY_BYTES = 1024 * 1024;
+/** Room for the longest message in any encoding; a JSON body is never larger. */
+const MAX_JSON_BYTES = 1024 * 1024;
+/** Files attached to one message, and uploaded in one request. */
+const MAX_FILES = 10;
+/** An upload request: its files, and some room for the multipart framing. */
+const MAX_UPLOAD_BYTES = MAX_FILES * MAX_ATTACHMENT_BYTES + MAX_JSON_BYTES;
 const MAX_TITLE_CHARS = 200;
 const PING_MS = 15_000;
 
@@ -27,6 +42,8 @@ export interface ApiServerDeps {
   port: number;
   /** Requests must carry it as a bearer token. Without one, anyone who can connect is let in. */
   token?: string;
+  /** Codex's working directory: uploads are saved in it, and its files can be downloaded. */
+  workspace: string;
   /** Serve the web chat at `/`. */
   webui?: boolean;
   admin: Pick<Admin, "status" | "listQueue" | "listSessions" | "scheduleList" | "usage">;
@@ -77,16 +94,23 @@ const title = z.string().trim().max(MAX_TITLE_CHARS);
 const bodies = {
   createSession: z.object({ title: title.optional() }),
   renameSession: z.object({ title }),
-  message: z.object({
-    text: z.string().trim().min(1, "text is required").max(MAX_MESSAGE_CHARS),
-    user: userId.optional(),
-  }),
+  message: z
+    .object({
+      text: z.string().trim().max(MAX_MESSAGE_CHARS).default(""),
+      // Paths of files uploaded to the session, as the upload returned them.
+      files: z.array(z.string().min(1)).max(MAX_FILES, `at most ${MAX_FILES} files`).default([]),
+      user: userId.optional(),
+    })
+    .refine((m) => m.text || m.files.length, "text or files is required"),
   stop: z.object({ user: userId.optional() }),
 };
 
 /** The JSON body of a request, checked against `schema`. An empty body is `{}`. */
 async function readBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T>> {
+  const tooLarge = () => new HttpError(413, "the body is too large");
+  if (Number(req.headers.get("content-length")) > MAX_JSON_BYTES) throw tooLarge();
   const text = await req.text();
+  if (text.length > MAX_JSON_BYTES) throw tooLarge();
   let raw: unknown = {};
   if (text.trim()) {
     // A cross-site form can post text/plain without a preflight; JSON can't.
@@ -123,7 +147,7 @@ const sse = (event: LiveEvent, epoch: string) =>
  * chat UI (create one, post messages, stream the turn as server-sent events).
  */
 export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
-  const { admin, scheduler, queue, sessions, apiSessions, hub, token } = deps;
+  const { admin, scheduler, queue, sessions, apiSessions, hub, token, workspace } = deps;
   const now = deps.now ?? Date.now;
   const history = deps.history ?? threadHistory;
   const startedAt = now();
@@ -182,7 +206,7 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
     port: deps.port,
     // Bundle the web chat once, minified, the way the compiled binary embeds it.
     development: false,
-    maxRequestBodySize: MAX_BODY_BYTES,
+    maxRequestBodySize: MAX_UPLOAD_BYTES,
     routes: {
       // The page is public; everything it loads goes through the API and its token.
       "/": deps.webui ? webui : false,
@@ -289,25 +313,102 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
       "/api/sessions/:id/messages": {
         POST: guard(async (req) => {
           const session = find(req.params.id);
-          const { text, user = DEFAULT_USER } = await readBody(req, bodies.message);
+          const body = await readBody(req, bodies.message);
+          const { text, user = DEFAULT_USER } = body;
+          const key = apiConversationKey(session.id);
+          // Only what was uploaded to this session: already in place, nothing to download.
+          const uploads = attachmentsDir(workspace, key);
+          const attached: Attachment[] = [];
+          for (const given of body.files) {
+            const path = resolve(workspace, given);
+            if (!(await fileWithin(uploads, path))) {
+              throw new HttpError(400, `not a file uploaded to this session: ${given}`);
+            }
+            const file = Bun.file(path);
+            const mimetype = file.type.split(";")[0];
+            attached.push({ name: basename(path), mimetype, size: file.size, ref: path, path });
+          }
+          const files = attached.map((f) => eventFile(f.ref, workspace));
           const messageId = crypto.randomUUID();
           const result = scheduler.submit({
-            conversationKey: apiConversationKey(session.id),
+            conversationKey: key,
             channel: API_CHAT,
             ts: messageId,
             threadTs: session.id,
             user,
             text,
+            files: attached,
           });
           if (result.status === "rejected") {
             throw new HttpError(429, "the agent's queue is full; try again in a while");
           }
           // A turn that started right away has announced the message itself.
           if (!hub.has(session.id, messageId)) {
-            hub.publish(session.id, messageId, { type: "user_message", text, user });
+            hub.publish(session.id, messageId, { type: "user_message", text, user, files });
           }
-          apiSessions.touch(session.id, titleFrom(text));
+          apiSessions.touch(session.id, titleFrom(text || (files[0]?.name ?? "")));
           return json({ messageId, ...result }, 202);
+        }),
+      },
+      "/api/sessions/:id/files": {
+        /**
+         * Upload files for the session's next message (multipart form data, one `file` field
+         * each). They are saved in the workspace; pass the returned paths as the message's
+         * `files`.
+         */
+        POST: guard(async (req) => {
+          const session = find(req.params.id);
+          const form = await req.formData().catch(() => {
+            throw new HttpError(400, "send the files as multipart/form-data, in `file` fields");
+          });
+          const uploads = form.getAll("file").filter((value) => value instanceof File);
+          if (uploads.length === 0) throw new HttpError(400, "no `file` field in the form");
+          if (uploads.length > MAX_FILES) {
+            throw new HttpError(400, `at most ${MAX_FILES} files at a time`);
+          }
+          for (const upload of uploads) {
+            if (upload.size === 0) throw new HttpError(400, `${upload.name} is empty`);
+            if (upload.size > MAX_ATTACHMENT_BYTES) {
+              const limit = formatSize(MAX_ATTACHMENT_BYTES);
+              throw new HttpError(413, `${upload.name} is larger than ${limit}`);
+            }
+          }
+          const dir = attachmentsDir(workspace, apiConversationKey(session.id));
+          await mkdir(dir, { recursive: true });
+          const saved = [];
+          for (const upload of uploads) {
+            const path = await freePath(dir, safeFileName(upload.name));
+            await Bun.write(path, upload);
+            saved.push({
+              ...eventFile(path, workspace),
+              size: upload.size,
+              mimetype: Bun.file(path).type.split(";")[0],
+            });
+          }
+          return json(saved, 201);
+        }),
+      },
+      "/api/files": {
+        /**
+         * Download a file of the workspace: one the agent sent with a reply, or an upload.
+         * `path` is as events give it. Always a download, never a page: what the agent wrote
+         * must not run in the browser with this origin's access to the API.
+         */
+        GET: guard(async (req) => {
+          const path = new URL(req.url).searchParams.get("path");
+          if (!path) throw new HttpError(400, "path is required");
+          const target = await fileWithin(workspace, path);
+          if (!target) throw new HttpError(404, `no file ${path} in the workspace`);
+          const file = Bun.file(target);
+          return new Response(file, {
+            headers: {
+              "content-type": file.type,
+              "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(basename(target))}`,
+              "x-content-type-options": "nosniff",
+              "content-security-policy": "sandbox",
+              "cache-control": "private, no-cache",
+            },
+          });
         }),
       },
       "/api/sessions/:id/stop": {

@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import type { ThreadItem } from "@openai/codex-sdk";
 import { parseReply } from "../agent/reply.ts";
 import { codexHome, rolloutPath } from "../codex.ts";
-import type { SessionEvent, SessionEventBody } from "./events.ts";
+import type { EventFile, SessionEvent, SessionEventBody } from "./events.ts";
 
 /**
  * A session's finished turns, read back from Codex's own history: the rollout file of each Codex
@@ -106,6 +106,21 @@ export function threadItem(item: Json): ThreadItem | null {
 
 /** How elseagent writes a chat message for Codex: `<@USER>: text` (see formatInput). */
 const ADDRESSED = /^<@([^>\s]+)>: /;
+/** How it lists a file attached to the message, on a line of its own (see describeFiles). */
+const ATTACHED = /^\[attached file: (.+?)(?: \([^()]*\))?\]$/;
+
+/** A user message as it was written: its text, and the files listed under it. */
+function userMessage(raw: string): { text: string; user: string; files: EventFile[] } {
+  const lines = raw.split("\n");
+  const files: EventFile[] = [];
+  for (let path = ATTACHED.exec(lines.at(-1) ?? "")?.[1]; path; ) {
+    files.unshift({ name: basename(path), path });
+    lines.pop();
+    path = ATTACHED.exec(lines.at(-1) ?? "")?.[1];
+  }
+  const text = lines.join("\n");
+  return { text: text.replace(ADDRESSED, ""), user: ADDRESSED.exec(text)?.[1] ?? "", files };
+}
 
 export interface HistoryOptions {
   /**
@@ -156,9 +171,7 @@ export function rolloutEvents(jsonl: string, { before }: HistoryOptions = {}): S
       // Not part of a turn we are reading.
     } else if (payload.type === "item_completed" && isObject(payload.item)) {
       if (payload.item.type === "UserMessage") {
-        const raw = contentText(payload.item.content);
-        const user = ADDRESSED.exec(raw)?.[1] ?? "";
-        emit({ type: "user_message", text: raw.replace(ADDRESSED, ""), user });
+        emit({ type: "user_message", ...userMessage(contentText(payload.item.content)) });
         start();
         continue;
       }
