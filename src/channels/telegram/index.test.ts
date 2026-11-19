@@ -380,6 +380,7 @@ describe("replies", () => {
 
   test("ensureChannel accepts only allowed users' chats", async () => {
     const { bot } = await setup();
+    expect(bot.stateKey).toBe(`telegram-${bot.identity.id}`);
     expect(await bot.ensureChannel("tg:42")).toBe("tg:42");
     expect(bot.ensureChannel("tg:9")).rejects.toThrow("allowedUsers");
     expect(bot.ensureChannel("#ops")).rejects.toThrow("tg:<chat id>");

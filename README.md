@@ -189,6 +189,11 @@ Run `bun run lint` to apply formatting and lint fixes. Core code is in
 [src/agent](src/agent), channel adapters in [src/channels](src/channels), the MCP
 server in [src/mcp](src/mcp), and migrations in [drizzle](drizzle).
 
+To add a channel, implement [`Channel`](src/channels/types.ts) and register its factory
+in [adapters.ts](src/channels/adapters.ts). Normalize incoming messages before handing
+them to the agent. Use a distinct prefix for new chat IDs and keep the adapter's
+`stateKey` stable so persisted queue entries and sessions remain reachable after restart.
+
 Push a version tag to run the [release workflow](.github/workflows/release.yml). It tests
 the tagged code and builds macOS and Linux archives for ARM64 and x64. Stable tags update the
 [Homebrew tap](https://github.com/elsescape/homebrew-tap) using `HOMEBREW_TAP_TOKEN`, a

@@ -5,8 +5,12 @@ import type { Attachment, Channel, Reply, ReplyTarget, ThreadContext } from "./t
  * the chat ID involved.
  */
 export class Channels {
-  constructor(readonly all: Channel[]) {
-    if (all.length === 0) throw new Error("no channel configured");
+  readonly stateKey: string;
+
+  constructor(readonly all: readonly Channel[]) {
+    const primary = all[0];
+    if (!primary) throw new Error("no channel configured");
+    this.stateKey = primary.stateKey;
   }
 
   /** The channel a chat ID (a message's `channel`) belongs to. */

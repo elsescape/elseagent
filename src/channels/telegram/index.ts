@@ -211,6 +211,7 @@ export async function createTelegramBot(
   return {
     platform: "telegram",
     label: `telegram @${identity.username} (${identity.id})`,
+    stateKey: `telegram-${identity.id}`,
     instructions: TELEGRAM_INSTRUCTIONS,
     identity,
     owns: (channel) => channel.startsWith(TELEGRAM_PREFIX),

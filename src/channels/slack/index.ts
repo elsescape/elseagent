@@ -10,7 +10,6 @@ import {
   NO_CONTEXT,
   type Reply,
   type ReplyTarget,
-  TELEGRAM_PREFIX,
 } from "../types.ts";
 import { ensureChannel, joinChannels } from "./channels.ts";
 import { CHOICE_ACTION, choiceBlocks, resolvedBlocks } from "./choices.ts";
@@ -48,8 +47,6 @@ export interface SlackBot extends Channel {
 }
 
 /** Telegram's channel IDs; everything else is Slack's. */
-const isOtherPlatform = (channel: string) => channel.startsWith(TELEGRAM_PREFIX);
-
 /**
  * Prepare a Socket Mode connection. Verifies the bot token up front (auth.test) so bad
  * credentials fail at startup, and learns the bot's own identity for mention handling.
@@ -178,9 +175,11 @@ export async function createSlackBot(
   return {
     platform: "slack",
     label: `slack @${identity.name} (${identity.userId})`,
+    stateKey: `${identity.teamId}-${identity.userId}`,
     instructions: SLACK_INSTRUCTIONS,
     identity,
-    owns: (channel) => !isOtherPlatform(channel),
+    // Slack keeps its existing bare IDs and names. Other adapters can use namespaced IDs.
+    owns: (channel) => !channel.includes(":"),
     replyTo,
     threadContext: (message, afterTs) =>
       message.threadTs

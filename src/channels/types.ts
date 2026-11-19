@@ -4,8 +4,6 @@
  * Each channel owns its own chat IDs, so one queue, session store and scheduler serve all of them.
  */
 
-export type Platform = "slack" | "telegram";
-
 export interface Logger {
   info(msg: string): void;
   warn(msg: string): void;
@@ -134,11 +132,20 @@ export interface ThreadContext {
 
 export const NO_CONTEXT: ThreadContext = { messages: [], omitted: 0 };
 
-/** A connected channel: receives messages for the agent and delivers its replies. */
-export interface Channel {
-  platform: Platform;
+/** A source that delivers platform events as normalized agent messages. */
+export interface IncomingChannel {
+  readonly platform: string;
   /** Shown in logs, e.g. "slack @reviewer (U0123)". */
-  label: string;
+  readonly label: string;
+  /** Connect and start delivering messages to `onMessage`. */
+  start(onMessage: MessageHandler): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/** A chat adapter that can also address replies to persisted messages and schedules. */
+export interface Channel extends IncomingChannel {
+  /** Stable, filename-safe identity used when this is the agent's primary channel. */
+  readonly stateKey: string;
   /** What Codex is told about conversations in this channel (formatting, threads, schedules). */
   instructions: string;
   /** Whether a chat ID (a message's `channel`) belongs to this channel. */
@@ -157,7 +164,4 @@ export interface Channel {
   download(file: Attachment, dest: string, signal?: AbortSignal): Promise<void>;
   /** Make sure the agent can post in a channel (name or ID); returns its ID. */
   ensureChannel(ref: string): Promise<string>;
-  /** Connect and start delivering messages to `onMessage`. */
-  start(onMessage: MessageHandler): Promise<void>;
-  stop(): Promise<void>;
 }

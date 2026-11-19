@@ -7,9 +7,8 @@ import { RecoveryStore } from "./agent/recovery.ts";
 import { Scheduler } from "./agent/scheduler.ts";
 import { ScheduleRunner } from "./agent/schedules.ts";
 import { createTurnRunner, RESTARTED_REPLY } from "./agent/turn.ts";
-import { Channels } from "./channels/registry.ts";
-import { createSlackBot } from "./channels/slack/index.ts";
-import { createTelegramBot } from "./channels/telegram/index.ts";
+import { configuredChannelNames, connectChannels } from "./channels/adapters.ts";
+import type { Channels } from "./channels/registry.ts";
 import { buildThreadOptions, createCodex, deleteCodexThread, resolveCodexPath } from "./codex.ts";
 import { codexAuthStatus, ensureCodexLogin } from "./codex-login.ts";
 import { type Config, ConfigError } from "./config/index.ts";
@@ -61,12 +60,7 @@ export async function startApp(
     ["reasoning effort", threadOptions.modelReasoningEffort ?? "(codex default)"],
     ["prompt", prompt ? `${prompt.length} chars` : "(none)"],
     ["time zone", timezone],
-    [
-      "channels",
-      [config.channels.slack && "slack", config.channels.telegram && "telegram"]
-        .filter(Boolean)
-        .join(", "),
-    ],
+    ["channels", configuredChannelNames(config.channels).join(", ")],
     [
       "limits",
       `${maxConcurrent} concurrent, queue ${maxQueue}, ` +
@@ -78,7 +72,7 @@ export async function startApp(
     console.log(
       `codex auth: ${auth}${auth === "not-logged-in" ? " (run would start device-code login)" : ""}`,
     );
-    console.log("dry run: config OK, not connecting to Slack or Telegram");
+    console.log("dry run: config OK, not connecting to chat services");
     return;
   }
 
@@ -88,18 +82,9 @@ export async function startApp(
     signal.throwIfAborted();
 
     // Connect-time checks (tokens) for every configured channel, before anything starts.
-    const slack = config.channels.slack ? await createSlackBot(config.channels.slack) : undefined;
-    signal.throwIfAborted();
-    const telegram = config.channels.telegram
-      ? await createTelegramBot(config.channels.telegram)
-      : undefined;
-    signal.throwIfAborted();
-    const channels = new Channels([slack, telegram].filter((c) => c !== undefined));
+    const channels = await connectChannels(config.channels, signal);
     // One database per agent, named after its bot, so several agents can share a state directory.
-    const dbName = slack
-      ? `${slack.identity.teamId}-${slack.identity.userId}`
-      : `telegram-${telegram?.identity.id}`;
-    const dbPath = join(stateDir, `${dbName}.sqlite`);
+    const dbPath = join(stateDir, `${channels.stateKey}.sqlite`);
     const db = openStateDb(dbPath);
     defer("state database", () => db.$client.close());
     const sessions = new SessionStore(db);
