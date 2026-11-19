@@ -53,6 +53,7 @@ settings:
       - message.groups
       - message.im
       - agent_session_stopped # the stop button on "is working"
+      - app_home_opened # required by agent_view; the agent does nothing on it
   interactivity:
     is_enabled: true
   org_deploy_enabled: false
