@@ -69,9 +69,10 @@ alone, remove the Slack section. With no channel at all, the agent is reached th
   Docker images set `ELSEAGENT_SANDBOX_MODE=danger-full-access`, giving Codex full access
   inside the container.
 
-- **API** · The [HTTP API](#http-api) listens on `127.0.0.1:2923`. Change `api.host` and
-  `api.port`, set `api.token` to require a bearer token, or turn it off with
-  `api.enabled: false`. A host other than loopback requires a token.
+- **API** · The [HTTP API](#http-api) and its web chat listen on `127.0.0.1:2923`. Change
+  `api.host` and `api.port`, set `api.token` to require a bearer token, or turn it off with
+  `api.enabled: false`. A host other than loopback requires a token. `api.webui: false`
+  keeps the API and drops the web chat.
 
 Use `elseagent init -o ./config.yaml` to write elsewhere and `-f` to overwrite. Use
 `elseagent run -c ./config.yaml` to select a file and `--dry-run` to check the config and
@@ -162,6 +163,16 @@ everyone who can talk to it.
 
 Records live in the agent's SQLite database, independent of Codex sessions. Updates use
 the last-read version to prevent one turn from overwriting another's changes.
+
+## Web chat
+
+Open `http://127.0.0.1:2923/` while the agent runs. Sessions are listed on the left, and a
+conversation shows the agent's commands, file changes and tool calls as it works, then its
+reply. Each session is a conversation with its own Codex session, like a Slack thread. With
+`api.token` set, the page asks for the token once and keeps it in the browser.
+
+The page is built into the `elseagent` binary and uses the [HTTP API](#http-api) below.
+Set `api.webui: false` to serve the API alone.
 
 ## HTTP API
 
@@ -281,14 +292,20 @@ bun install --frozen-lockfile
 bun run start -- --help
 bun run typecheck
 bun test
-bun run build                 # dist/elseagent
+bun run build                 # dist/elseagent, web chat included
 bun run db:generate           # After editing src/state/schema.ts
 ```
 
 Run `bun run lint` to apply formatting and lint fixes. Core code is in
 [src/agent](src/agent), channel adapters in [src/channels](src/channels), the MCP
-server in [src/mcp](src/mcp), the HTTP API in [src/api](src/api), and migrations in
-[drizzle](drizzle).
+server in [src/mcp](src/mcp), the HTTP API in [src/api](src/api), the web chat in
+[src/web](src/web), and migrations in [drizzle](drizzle).
+
+The web chat is React with Tailwind and [shadcn/ui](https://ui.shadcn.com) components
+(copied into [src/web/components/ui](src/web/components/ui)). Bun bundles it: from source
+through the plugin in [bunfig.toml](bunfig.toml), and into the binary through
+[scripts/build.ts](scripts/build.ts), because `bun build --compile` on the command line
+cannot run the Tailwind plugin.
 
 To add a channel, implement [`Channel`](src/channels/types.ts) and register its factory
 in [adapters.ts](src/channels/adapters.ts). Normalize incoming messages before handing

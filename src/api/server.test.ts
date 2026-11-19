@@ -33,7 +33,15 @@ afterEach(async () => {
  * The API over a real queue and scheduler. A turn runs until the test finishes it: it reports a
  * command, then replies with the message text in capitals (or fails when told to).
  */
-function setup({ token, maxQueue = 10 }: { token?: string; maxQueue?: number } = {}) {
+function setup({
+  token,
+  maxQueue = 10,
+  webui = false,
+}: {
+  token?: string;
+  maxQueue?: number;
+  webui?: boolean;
+} = {}) {
   const db = openStateDb(":memory:");
   const queue = new MessageQueue(db);
   const sessions = new SessionStore(db);
@@ -93,6 +101,7 @@ function setup({ token, maxQueue = 10 }: { token?: string; maxQueue?: number } =
     host: "127.0.0.1",
     port: 0,
     token,
+    webui,
     admin,
     scheduler,
     queue,
@@ -215,6 +224,40 @@ describe("access", () => {
     expect(await missing.json()).toEqual({ error: "not found" });
     expect((await call("DELETE", "/status")).status).toBe(404);
     expect((await fetch(base.replace("/api", "/"))).status).toBe(404);
+  });
+});
+
+describe("web chat", () => {
+  test("is served at / with its script and stylesheet, without a token", async () => {
+    setup({ token: TOKEN, webui: true });
+    const origin = new URL(endpoint?.url ?? "").origin;
+    expect(endpoint?.webui).toBe(`${origin}/`);
+    const page = await fetch(`${origin}/`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    const html = await page.text();
+    expect(html).toContain('<div id="root">');
+    const assets = [...html.matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)].map((m) => m[1]);
+    expect(assets.map((a) => a?.split(".").pop()).sort()).toEqual(["css", "js"]);
+    for (const asset of assets) {
+      const res = await fetch(origin + asset);
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // Tailwind ran: its directives are compiled away and the utilities exist.
+      if (asset?.endsWith(".css")) {
+        expect(body).not.toContain("@plugin");
+        expect(body).toContain(".max-w-3xl");
+      }
+    }
+    // The API behind it still wants the token.
+    expect((await fetch(`${origin}/api/status`)).status).toBe(401);
+  });
+
+  test("is not served when turned off", async () => {
+    setup();
+    expect(endpoint?.webui).toBeUndefined();
+    const res = await fetch(new URL(endpoint?.url ?? "").origin);
+    expect(res.status).toBe(404);
   });
 });
 

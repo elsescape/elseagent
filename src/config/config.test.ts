@@ -64,7 +64,7 @@ describe("loadConfig", () => {
 
   test("the api is on by default and is enough without a channel", async () => {
     const config = await loadConfig(await writeConfig("api-only.yaml", "maxConcurrent: 2\n"));
-    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923 });
+    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923, webui: true });
     expect(config.channels).toEqual({});
   });
 
@@ -84,7 +84,10 @@ describe("loadConfig", () => {
       host: "0.0.0.0",
       port: 8080,
       token: "0123456789abcdef",
+      webui: true,
     });
+    const plain = await writeConfig("api-plain.yaml", "api:\n  webui: false\n");
+    expect((await loadConfig(plain)).api.webui).toBe(false);
     // Off, it is not checked.
     const disabled = await writeConfig(
       "api-off.yaml",
@@ -247,7 +250,7 @@ describe(".config.example.yaml", () => {
 
   test("only enables the local API and Slack credentials by default", () => {
     expect(Bun.YAML.parse(CONFIG_TEMPLATE)).toEqual({
-      api: { enabled: true, host: "127.0.0.1", port: 2923 },
+      api: { enabled: true, host: "127.0.0.1", port: 2923, webui: true },
       channels: { slack: { botToken: `xoxb-${PLACEHOLDER}`, appToken: `xapp-${PLACEHOLDER}` } },
     });
   });

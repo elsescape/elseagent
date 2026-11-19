@@ -8,6 +8,7 @@ import type { ApiSession, ApiSessionStore } from "../state/api-sessions.ts";
 import type { MessageQueue, SessionStore } from "../state/index.ts";
 import type { MemoryStore } from "../state/memory.ts";
 import { TODO_STATUSES, type TodoStore } from "../state/todos.ts";
+import webui from "../web/index.html";
 import { API_CHAT, apiConversationKey, titleFrom } from "./channel.ts";
 import type { EventHub, LiveEvent, SessionEvent } from "./events.ts";
 import { type HistoryOptions, threadHistory } from "./history.ts";
@@ -24,6 +25,8 @@ export interface ApiServerDeps {
   port: number;
   /** Requests must carry it as a bearer token. Without one, anyone who can connect is let in. */
   token?: string;
+  /** Serve the web chat at `/`. */
+  webui?: boolean;
   admin: Pick<Admin, "status" | "listQueue" | "listSessions" | "scheduleList" | "usage">;
   scheduler: Pick<Scheduler, "submit" | "cancel" | "runningTurns">;
   queue: Pick<MessageQueue, "conversations">;
@@ -42,6 +45,8 @@ export interface ApiServerDeps {
 export interface ApiEndpoint {
   /** Base URL of the API, e.g. `http://127.0.0.1:2923/api`. */
   url: string;
+  /** Where the web chat is, when it is served. */
+  webui?: string;
   stop(): Promise<void>;
 }
 
@@ -169,7 +174,11 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
   const server = Bun.serve({
     hostname: deps.host,
     port: deps.port,
+    // Bundle the web chat once, minified, the way the compiled binary embeds it.
+    development: false,
     routes: {
+      // The page is public; everything it loads goes through the API and its token.
+      "/": deps.webui ? webui : false,
       "/api/status": {
         GET: guard(() =>
           json({
@@ -349,8 +358,10 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
     fetch: () => error(404, "not found"),
   });
 
+  const origin = `http://${server.hostname}:${server.port}`;
   return {
-    url: `http://${server.hostname}:${server.port}/api`,
+    url: `${origin}/api`,
+    webui: deps.webui ? `${origin}/` : undefined,
     stop: () => server.stop(true),
   };
 }

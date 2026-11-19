@@ -36,6 +36,8 @@ api:
   host: 127.0.0.1
   port: 2923
   # token: REPLACE-ME-long-random-secret
+  # The web chat, served at http://127.0.0.1:2923/ from the same port.
+  webui: true
 
 # Channels are optional when the API is enabled.
 channels:
