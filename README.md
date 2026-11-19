@@ -173,7 +173,8 @@ the last-read version to prevent one turn from overwriting another's changes.
 Open `http://127.0.0.1:2923/` while the agent runs. Sessions are listed on the left, and a
 conversation shows the agent's commands, file changes and tool calls as it works, then its
 reply. Each session is a conversation with its own Codex session, like a Slack thread. With
-`api.token` set, the page asks for the token once and keeps it in the browser.
+`api.token` set, the page asks for the token once and keeps it in the browser. It works on
+a phone, and has light and dark themes that follow the system unless you pick one.
 
 The page is built into the `elseagent` binary and uses the [HTTP API](#http-api) below.
 Set `api.webui: false` to serve the API alone.

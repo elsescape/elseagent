@@ -1,30 +1,9 @@
-import type { ThreadItem } from "@openai/codex-sdk";
-import DOMPurify from "dompurify";
-import {
-  ArrowUp,
-  Bot,
-  Brain,
-  ChevronRight,
-  CircleAlert,
-  FilePen,
-  Globe,
-  ListTodo,
-  LoaderCircle,
-  Paperclip,
-  Pencil,
-  Square,
-  SquarePen,
-  Terminal,
-  Trash2,
-  Wrench,
-} from "lucide-react";
-import { marked } from "marked";
+import { ArrowDown, Menu, Pencil, SquarePen, Trash2 } from "lucide-react";
 import {
   type FormEvent,
-  type KeyboardEvent,
-  type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -40,264 +19,23 @@ import {
   Unauthorized,
 } from "./client.ts";
 import { Button } from "./components/ui/button.tsx";
-import { cn } from "./lib/utils.ts";
-import { buildTimeline, type Entry } from "./timeline.ts";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  SheetContent,
+} from "./components/ui/dialog.tsx";
+import { Composer } from "./composer.tsx";
+import { BlockView } from "./messages.tsx";
+import { SidebarContent } from "./sidebar.tsx";
+import { useTheme } from "./theme.ts";
+import { buildTimeline, groupSteps } from "./timeline.ts";
 
 const REFRESH_MS = 4000;
-
-/** Markdown from the agent as HTML that is safe to insert. */
-const renderMarkdown = (text: string) =>
-  DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }));
-
-function Markdown({ text, className }: { text: string; className?: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text]);
-  return (
-    <div
-      className={cn(
-        "prose prose-sm prose-neutral dark:prose-invert max-w-none break-words prose-pre:bg-muted prose-pre:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:before:content-none prose-code:after:content-none prose-pre:prose-code:bg-transparent prose-pre:prose-code:p-0",
-        className,
-      )}
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized by DOMPurify above
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
-}
-
-/** Codex runs commands as `/bin/zsh -lc '<script>'`; the script is what matters. */
-function script(command: string): string {
-  const wrapped = /^\S*sh -l?c (.+)$/s.exec(command)?.[1];
-  if (!wrapped) return command;
-  const quoted = /^(['"])(.*)\1$/s.exec(wrapped);
-  return quoted ? (quoted[2] ?? wrapped) : wrapped;
-}
-
-const baseName = (path: string) => path.split("/").pop() || path;
-
-/** One thing Codex did, as a line that opens for the details. */
-function Step({
-  icon,
-  title,
-  details,
-  state,
-}: {
-  icon: ReactNode;
-  title: ReactNode;
-  details?: string;
-  state: "running" | "failed" | "done";
-}) {
-  const mark =
-    state === "running" ? (
-      <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
-    ) : state === "failed" ? (
-      <CircleAlert className="size-3.5 text-destructive" />
-    ) : null;
-  const line = (
-    <>
-      <span className="text-muted-foreground [&_svg]:size-3.5">{icon}</span>
-      <span className="min-w-0 flex-1 truncate">{title}</span>
-      {mark}
-    </>
-  );
-  if (!details) {
-    return (
-      <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-1.5 text-sm">
-        {line}
-      </div>
-    );
-  }
-  return (
-    <details className="group rounded-lg border bg-muted/40 text-sm">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5">
-        {line}
-        <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
-      </summary>
-      <pre className="max-h-80 overflow-auto border-t px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-muted-foreground">
-        {details}
-      </pre>
-    </details>
-  );
-}
-
-function Activity({ item, done }: { item: ThreadItem; done: boolean }) {
-  const failed = "status" in item && item.status === "failed";
-  const state = failed ? "failed" : done ? "done" : "running";
-  switch (item.type) {
-    case "command_execution":
-      return (
-        <Step
-          icon={<Terminal />}
-          title={<code className="font-mono text-xs">{script(item.command)}</code>}
-          details={
-            `$ ${item.command}\n` +
-            (item.aggregated_output || "(no output)") +
-            (item.exit_code ? `\n(exit ${item.exit_code})` : "")
-          }
-          state={state}
-        />
-      );
-    case "file_change":
-      return (
-        <Step
-          icon={<FilePen />}
-          title={`Edited ${item.changes.length} file${item.changes.length === 1 ? "" : "s"}`}
-          details={item.changes.map((c) => `${c.kind} ${c.path}`).join("\n")}
-          state={state}
-        />
-      );
-    case "mcp_tool_call":
-      return (
-        <Step
-          icon={<Wrench />}
-          title={
-            <>
-              Used <code className="font-mono text-xs">{`${item.server}.${item.tool}`}</code>
-            </>
-          }
-          details={JSON.stringify(
-            { arguments: item.arguments, result: item.result, error: item.error },
-            null,
-            2,
-          )}
-          state={state}
-        />
-      );
-    case "web_search":
-      return <Step icon={<Globe />} title={`Searched for “${item.query}”`} state={state} />;
-    case "todo_list":
-      return (
-        <Step
-          icon={<ListTodo />}
-          title={`Plan: ${item.items.filter((t) => t.completed).length}/${item.items.length} done`}
-          details={item.items.map((t) => `${t.completed ? "[x]" : "[ ]"} ${t.text}`).join("\n")}
-          state={state}
-        />
-      );
-    case "error":
-      return <Step icon={<CircleAlert />} title={item.message} state="failed" />;
-    case "reasoning":
-      return (
-        <div className="flex gap-2 text-muted-foreground">
-          <Brain className="mt-1 size-3.5 shrink-0" />
-          <Markdown text={item.text} className="text-muted-foreground italic" />
-        </div>
-      );
-    case "agent_message":
-      return <Markdown text={item.text} className="text-muted-foreground" />;
-  }
-}
-
-const ENDED = { failed: "The turn failed", interrupted: "The turn was stopped" };
-
-function EntryView({ entry, onChoice }: { entry: Entry; onChoice: (text: string) => void }) {
-  switch (entry.kind) {
-    case "user":
-      return (
-        <div className="ml-auto w-fit max-w-[80%] rounded-2xl bg-secondary px-4 py-2 text-sm whitespace-pre-wrap break-words">
-          {entry.text}
-        </div>
-      );
-    case "item":
-      return <Activity item={entry.item} done={entry.done} />;
-    case "reply":
-      return (
-        <div className="space-y-3">
-          <Markdown text={entry.text} />
-          {entry.files.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {entry.files.map((file) => (
-                <span
-                  key={file}
-                  title={file}
-                  className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs text-muted-foreground"
-                >
-                  <Paperclip className="size-3" />
-                  {baseName(file)}
-                </span>
-              ))}
-            </div>
-          )}
-          {entry.choices.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {entry.choices.map((choice) => (
-                <Button key={choice} variant="outline" size="sm" onClick={() => onChoice(choice)}>
-                  {choice}
-                </Button>
-              ))}
-            </div>
-          )}
-        </div>
-      );
-    case "ended":
-      return (
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <div className="h-px flex-1 bg-border" />
-          {ENDED[entry.status]}
-          <div className="h-px flex-1 bg-border" />
-        </div>
-      );
-  }
-}
-
-function Composer({
-  busy,
-  onSend,
-  onStop,
-}: {
-  busy: boolean;
-  onSend: (text: string) => void;
-  onStop: () => void;
-}) {
-  const [text, setText] = useState("");
-  const input = useRef<HTMLTextAreaElement>(null);
-  const submit = () => {
-    if (!text.trim()) return;
-    onSend(text);
-    setText("");
-  };
-  // Grow with the text, up to a few lines.
-  useEffect(() => {
-    const el = input.current;
-    if (!el) return;
-    el.style.height = "";
-    if (text) el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [text]);
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends, except while an input method is still composing (Chinese, Japanese…).
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
-    e.preventDefault();
-    submit();
-  };
-  return (
-    <div className="flex items-end gap-2 rounded-2xl border bg-background p-2 shadow-sm focus-within:ring-[3px] focus-within:ring-ring/30 dark:bg-input/30">
-      <textarea
-        ref={input}
-        // biome-ignore lint/a11y/noAutofocus: the page is the chat; typing should just work
-        autoFocus
-        rows={1}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Message the agent…"
-        className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
-      />
-      {busy && !text.trim() ? (
-        <Button size="icon-sm" className="rounded-full" onClick={onStop} title="Stop">
-          <Square className="size-3 fill-current" />
-        </Button>
-      ) : (
-        <Button
-          size="icon-sm"
-          className="rounded-full"
-          onClick={submit}
-          disabled={!text.trim()}
-          title="Send"
-        >
-          <ArrowUp />
-        </Button>
-      )}
-    </div>
-  );
-}
+/** Closer to the bottom than this, the view follows new messages. */
+const FOLLOW_PX = 120;
 
 function TokenForm({ onSaved }: { onSaved: () => void }) {
   const [token, setToken] = useState("");
@@ -309,18 +47,21 @@ function TokenForm({ onSaved }: { onSaved: () => void }) {
   return (
     <div className="flex h-full items-center justify-center p-4">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-xl border p-6 shadow-sm">
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <h1 className="font-semibold">elseagent</h1>
           <p className="text-sm text-muted-foreground">
-            This agent's API needs its token (<code>api.token</code> in the config).
+            This agent's API needs its token (<code className="font-mono text-xs">api.token</code>{" "}
+            in the config). It is kept in this browser.
           </p>
         </div>
         <input
           type="password"
+          // biome-ignore lint/a11y/noAutofocus: the only thing to do on this screen
+          autoFocus
           value={token}
           onChange={(e) => setToken(e.target.value)}
           placeholder="API token"
-          className="h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="h-9 w-full rounded-md border bg-transparent px-3 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm"
         />
         <Button type="submit" className="w-full" disabled={!token.trim()}>
           Continue
@@ -330,18 +71,63 @@ function TokenForm({ onSaved }: { onSaved: () => void }) {
   );
 }
 
+/** The session's title; the pencil turns it into a field. */
+function Title({ session, onRename }: { session: Session; onRename: (title: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = () => {
+    if (draft !== null && draft.trim() !== session.title) onRename(draft.trim());
+    setDraft(null);
+  };
+  if (draft === null) {
+    return (
+      <>
+        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
+          {session.title || "New chat"}
+        </h1>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title="Rename"
+          onClick={() => setDraft(session.title)}
+        >
+          <Pencil />
+        </Button>
+      </>
+    );
+  }
+  return (
+    <input
+      // biome-ignore lint/a11y/noAutofocus: opened by the user to type in
+      autoFocus
+      value={draft}
+      maxLength={200}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") save();
+        if (e.key === "Escape") setDraft(null);
+      }}
+      className="h-8 min-w-0 flex-1 rounded-md border bg-transparent px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm"
+    />
+  );
+}
+
 const sessionFromUrl = () => location.hash.slice(1) || null;
 const showSession = (id: string | null) =>
   history.replaceState(null, "", id ? `#${id}` : location.pathname);
 
 function App() {
+  const [theme, setTheme] = useTheme();
   const [locked, setLocked] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string | null>(sessionFromUrl);
   const [events, setEvents] = useState<SessionEvent[]>([]);
-  const bottom = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [following, setFollowing] = useState(true);
+  const scroller = useRef<HTMLDivElement>(null);
 
   /** Run an API call; a missing token asks for one, anything else is shown. */
   const attempt = useCallback(async <T,>(call: () => Promise<T>): Promise<T | undefined> => {
@@ -371,6 +157,7 @@ function App() {
   // Show the session: what Codex remembers of it, then whatever happens from here on.
   useEffect(() => {
     setEvents([]);
+    setFollowing(true);
     showSession(activeId);
     if (!activeId || locked) return;
     const stop = new AbortController();
@@ -393,34 +180,46 @@ function App() {
   }, [activeId, locked, attempt, refresh]);
 
   const timeline = useMemo(() => buildTimeline(events), [events]);
+  const blocks = useMemo(() => groupSteps(timeline.entries, timeline.busy), [timeline]);
   const active = sessions.find((s) => s.id === activeId);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: follow the conversation as it grows
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end" });
-  }, [timeline.entries.length, timeline.status]);
+  // Follow the conversation as it grows, unless the reader has scrolled up to read.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when there is more to show
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && following) el.scrollTop = el.scrollHeight;
+  }, [events, following]);
+  const onScroll = () => {
+    const el = scroller.current;
+    if (el) setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_PX);
+  };
+
+  const select = (id: string | null) => {
+    setActiveId(id);
+    setMenuOpen(false);
+  };
 
   const send = async (text: string) => {
     if (!text.trim()) return;
     const id = activeId ?? (await attempt(api.create))?.id;
     if (!id) return;
     setActiveId(id);
+    setFollowing(true);
     await attempt(() => api.send(id, text.trim()));
     void refresh();
   };
 
   const remove = async () => {
-    if (!activeId || !confirm("Delete this session?")) return;
+    setDeleting(false);
+    if (!activeId) return;
     await attempt(() => api.remove(activeId));
     setActiveId(null);
     void refresh();
   };
 
-  const rename = async () => {
-    if (!active) return;
-    const title = prompt("Session title", active.title);
-    if (title === null) return;
-    await attempt(() => api.rename(active.id, title));
+  const rename = async (title: string) => {
+    if (!activeId) return;
+    await attempt(() => api.rename(activeId, title));
     void refresh();
   };
 
@@ -435,6 +234,16 @@ function App() {
     );
   }
 
+  const sidebar = (
+    <SidebarContent
+      sessions={sessions}
+      activeId={activeId}
+      status={status}
+      theme={theme}
+      onTheme={setTheme}
+      onSelect={select}
+    />
+  );
   const composer = (
     <Composer
       busy={timeline.busy}
@@ -442,102 +251,128 @@ function App() {
       onStop={() => activeId && void attempt(() => api.stop(activeId))}
     />
   );
-  const empty = timeline.entries.length === 0 && !timeline.busy;
+  const empty = blocks.length === 0 && !timeline.busy;
 
   return (
-    <div className="flex h-full">
-      <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar md:flex">
-        <div className="flex h-12 items-center justify-between px-3">
-          <span className="flex items-center gap-2 px-1 text-sm font-semibold">
-            <Bot className="size-4" />
-            elseagent
-          </span>
-          <Button variant="ghost" size="icon-sm" title="New chat" onClick={() => setActiveId(null)}>
-            <SquarePen />
+    <div className="flex h-dvh">
+      <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar md:flex lg:w-72">
+        {sidebar}
+      </aside>
+      <Dialog open={menuOpen} onOpenChange={setMenuOpen}>
+        <SheetContent aria-describedby={undefined}>
+          <DialogTitle className="sr-only">Conversations</DialogTitle>
+          {sidebar}
+        </SheetContent>
+      </Dialog>
+
+      <main className="relative flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-1 px-2 md:px-4">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Conversations"
+            className="md:hidden"
+            onClick={() => setMenuOpen(true)}
+          >
+            <Menu />
           </Button>
-        </div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-          {sessions.map((session) => (
-            <button
-              type="button"
-              key={session.id}
-              onClick={() => setActiveId(session.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-accent",
-                session.id === activeId && "bg-accent font-medium",
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate">{session.title || "New chat"}</span>
-              {session.status !== "idle" && (
-                <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="border-t px-4 py-2.5 text-xs text-muted-foreground">
-          {status ? (
+          {active ? (
             <>
-              <div className="truncate">{status.model ?? "Codex default model"}</div>
-              <div>
-                {status.running.length} running · {status.queued} queued
-              </div>
+              <Title key={active.id} session={active} onRename={rename} />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="Delete"
+                onClick={() => setDeleting(true)}
+                disabled={timeline.busy}
+              >
+                <Trash2 />
+              </Button>
             </>
           ) : (
-            "Connecting…"
+            <span className="flex-1 px-1 text-sm font-medium md:hidden">elseagent</span>
           )}
-        </div>
-      </aside>
-
-      <main className="flex min-w-0 flex-1 flex-col">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="New chat"
+            className="md:hidden"
+            onClick={() => select(null)}
+          >
+            <SquarePen />
+          </Button>
+        </header>
         {error && (
-          <div className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          <div className="border-y bg-destructive/10 px-4 py-2 text-sm text-destructive">
             {error}
           </div>
         )}
-        {activeId && (
-          <header className="flex h-12 shrink-0 items-center gap-1 border-b px-4">
-            <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
-              {active?.title || "New chat"}
-            </h1>
-            <Button variant="ghost" size="icon-sm" title="Rename" onClick={rename}>
-              <Pencil />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title="Delete"
-              onClick={remove}
-              disabled={timeline.busy}
-            >
-              <Trash2 />
-            </Button>
-          </header>
-        )}
+
         {empty ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4">
-            <h2 className="text-2xl font-semibold tracking-tight">What can I do for you?</h2>
+          <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 pb-[12vh]">
+            <div className="space-y-2 text-center">
+              <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                What can I do for you?
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                The agent works in its workspace and shows each step as it goes.
+              </p>
+            </div>
             <div className="w-full max-w-2xl">{composer}</div>
           </div>
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
-                {timeline.entries.map((entry) => (
-                  <EntryView key={entry.key} entry={entry} onChoice={send} />
+            <div ref={scroller} onScroll={onScroll} className="flex-1 overflow-y-auto">
+              <div className="mx-auto max-w-3xl space-y-5 px-4 pt-2 pb-8">
+                {blocks.map((block) => (
+                  <BlockView key={block.key} block={block} onChoice={send} />
                 ))}
                 {timeline.busy && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                    Agent {timeline.status || "is waiting for a turn…"}
+                  <div className="text-sm">
+                    <span className="text-shimmer">
+                      Agent {timeline.status || "is waiting for a turn…"}
+                    </span>
                   </div>
                 )}
-                <div ref={bottom} />
               </div>
             </div>
-            <div className="mx-auto w-full max-w-3xl px-4 pb-4">{composer}</div>
+            <div className="relative mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-4 md:pb-4">
+              {!following && (
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  title="Jump to the latest"
+                  className="absolute -top-11 left-1/2 -translate-x-1/2 rounded-full bg-background shadow-md dark:bg-popover"
+                  onClick={() => setFollowing(true)}
+                >
+                  <ArrowDown />
+                </Button>
+              )}
+              {composer}
+            </div>
           </>
         )}
       </main>
+
+      <Dialog open={deleting} onOpenChange={setDeleting}>
+        <DialogContent>
+          <div className="space-y-2">
+            <DialogTitle>Delete this conversation?</DialogTitle>
+            <DialogDescription>
+              “{active?.title || "New chat"}” is removed from the list and the agent forgets it.
+              Files it made in the workspace stay.
+            </DialogDescription>
+          </div>
+          <div className="flex justify-end gap-2">
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button variant="destructive" onClick={remove}>
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
