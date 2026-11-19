@@ -7,6 +7,21 @@ type MessageEvent = KnownEventFromType<"message">;
 
 export { conversationKey } from "../types.ts";
 
+/** Ignore redelivery of recent Slack messages, including delivery through both subscriptions. */
+export function deduplicateMessages(dispatch: (message: IncomingMessage) => Promise<void>) {
+  const seen = new Set<string>();
+  return async (message: IncomingMessage) => {
+    const key = `${message.channel}:${message.ts}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (seen.size > 1_000) {
+      const oldest = seen.values().next().value;
+      if (oldest !== undefined) seen.delete(oldest);
+    }
+    await dispatch(message);
+  };
+}
+
 /** The fields of a Slack file object we use. */
 export interface SlackFile {
   name?: string | null;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   conversationKey,
+  deduplicateMessages,
   fromDirectMessage,
   fromMention,
   fromThreadMessage,
@@ -11,6 +12,30 @@ import {
 } from "./message.ts";
 
 const BOT = "UBOT";
+
+test("Slack retries and duplicate subscriptions dispatch once per channel and timestamp", async () => {
+  const received: string[] = [];
+  const pending = Promise.withResolvers<void>();
+  const dispatch = deduplicateMessages(async ({ channel }) => {
+    received.push(channel);
+    await pending.promise;
+  });
+  const message = {
+    channel: "C1",
+    ts: "1.0",
+    threadTs: "1.0",
+    user: "U1",
+    text: "hello",
+    isDirect: false,
+  };
+  const first = dispatch(message);
+  const duplicate = dispatch({ ...message });
+  const otherChannel = dispatch({ ...message, channel: "C2" });
+  pending.resolve();
+  await Promise.all([first, duplicate, otherChannel]);
+  await dispatch(message);
+  expect(received).toEqual(["C1", "C2"]);
+});
 
 type MentionEvent = Parameters<typeof fromMention>[0];
 type MessageEvent = Parameters<typeof fromDirectMessage>[0];

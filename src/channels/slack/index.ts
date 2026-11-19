@@ -15,6 +15,7 @@ import { fetchThreadContext } from "./context.ts";
 import { downloadSlackFile } from "./files.ts";
 import { SLACK_INSTRUCTIONS } from "./instructions.ts";
 import {
+  deduplicateMessages,
   fromDirectMessage,
   fromMention,
   fromThreadMessage,
@@ -198,15 +199,16 @@ export async function createSlackBot(
           await reply.post("Sorry, something went wrong while handling that.").catch(() => {});
         }
       };
+      const dispatchMessage = deduplicateMessages(dispatch);
       app.event("app_mention", async ({ event }) => {
         const message = fromMention(event, identity.userId);
-        if (message) await dispatch(message);
+        if (message) await dispatchMessage(message);
       });
       app.message(async ({ message: event }) => {
         const message =
           fromDirectMessage(event, identity.userId) ??
           (config.threadReplies === "auto" ? fromThreadMessage(event, identity.userId) : null);
-        if (message) await dispatch(message);
+        if (message) await dispatchMessage(message);
       });
       // The stopped turn returns its Slack session to active during cleanup.
       app.event("agent_session_stopped", async ({ event }) => {
