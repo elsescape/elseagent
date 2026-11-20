@@ -17,15 +17,15 @@ import type { Attachment } from "../channels/types.ts";
 import type { ApiSession, ApiSessionStore } from "../state/api-sessions.ts";
 import type { MessageQueue, SessionStore } from "../state/index.ts";
 import type { MemoryStore } from "../state/memory.ts";
-import { TODO_STATUSES, type TodoStore } from "../state/todos.ts";
+import { TODO_FILTERS, type TodoStore } from "../state/todos.ts";
 import { formatSize } from "../util/text.ts";
 import webui from "../web/index.html";
-import { API_CHAT, apiConversationKey, eventFile, titleFrom } from "./channel.ts";
-import type { EventHub, LiveEvent, SessionEvent } from "./events.ts";
+import { API_CHAT, announce, apiConversationKey, eventFile, titleFrom } from "./channel.ts";
+import type { EventHub, LiveEvent, SessionEvent, SessionStatus, UploadedFile } from "./events.ts";
 import { type HistoryOptions, threadHistory } from "./history.ts";
 
 /** Who a message is from when the client doesn't say. */
-export const DEFAULT_USER = "web";
+const DEFAULT_USER = "web";
 const MAX_MESSAGE_CHARS = 100_000;
 /** Room for the longest message in any encoding; a JSON body is never larger. */
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -107,10 +107,17 @@ const bodies = {
 
 /** The JSON body of a request, checked against `schema`. An empty body is `{}`. */
 async function readBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T>> {
-  const tooLarge = () => new HttpError(413, "the body is too large");
-  if (Number(req.headers.get("content-length")) > MAX_JSON_BYTES) throw tooLarge();
-  const text = await req.text();
-  if (text.length > MAX_JSON_BYTES) throw tooLarge();
+  // Uploads raise the server's own limit far above what JSON needs, so count here, and stop
+  // reading as soon as it is too much.
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  for await (const chunk of req.body ?? []) {
+    bytes += chunk.byteLength;
+    if (bytes > MAX_JSON_BYTES) throw new HttpError(413, "the body is too large");
+    text += decoder.decode(chunk, { stream: true });
+  }
+  text += decoder.decode();
   let raw: unknown = {};
   if (text.trim()) {
     // A cross-site form can post text/plain without a preflight; JSON can't.
@@ -138,6 +145,13 @@ function intParam(url: URL, name: string, fallback: number, max: number): number
   if (!Number.isInteger(n) || n < 1) throw new HttpError(400, `${name} must be a whole number`);
   return Math.min(n, max);
 }
+
+/** How many items a list returns: `?limit=`, at most 500. */
+const limit = (req: Request, fallback: number) =>
+  intParam(new URL(req.url), "limit", fallback, 500);
+
+/** A file's media type from its name, without parameters ("text/plain", not "…;charset=utf-8"). */
+const mimeOf = (path: string) => Bun.file(path).type.split(";")[0];
 
 const sse = (event: LiveEvent, epoch: string) =>
   `id: ${epoch}:${event.seq}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -186,7 +200,7 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
   const busyConversations = () => {
     const running = new Set(scheduler.runningTurns().map((t) => t.message.conversationKey));
     const waiting = new Set(queue.conversations());
-    return (id: string): "running" | "queued" | "idle" => {
+    return (id: string): SessionStatus => {
       const key = apiConversationKey(id);
       return running.has(key) ? "running" : waiting.has(key) ? "queued" : "idle";
     };
@@ -200,6 +214,19 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
     if (!session) throw new HttpError(404, `no session ${id}`);
     return session;
   };
+
+  /** A route under `/api/sessions/:id`: the handler gets the session and its conversation key. */
+  const withSession = <P extends string>(
+    handler: (
+      at: { session: ApiSession; key: string },
+      req: BunRequest<P>,
+      server: Server<undefined>,
+    ) => Response | Promise<Response>,
+  ): Handler<P> =>
+    guard((req, server) => {
+      const session = find((req.params as Record<string, string>).id ?? "");
+      return handler({ session, key: apiConversationKey(session.id) }, req, server);
+    });
 
   const server = Bun.serve({
     hostname: deps.host,
@@ -221,10 +248,10 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
         ),
       },
       "/api/queue": {
-        GET: guard((req) => json(admin.listQueue(intParam(new URL(req.url), "limit", 50, 500)))),
+        GET: guard((req) => json(admin.listQueue(limit(req, 50)))),
       },
       "/api/conversations": {
-        GET: guard((req) => json(admin.listSessions(intParam(new URL(req.url), "limit", 50, 500)))),
+        GET: guard((req) => json(admin.listSessions(limit(req, 50)))),
       },
       "/api/schedules": { GET: guard(() => json(admin.scheduleList())) },
       "/api/usage": {
@@ -249,23 +276,23 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
         GET: guard((req) => {
           const url = new URL(req.url);
           const wanted = url.searchParams.get("status") ?? "active";
-          const filter = ([...TODO_STATUSES, "active", "all"] as const).find((s) => s === wanted);
+          const filter = TODO_FILTERS.find((s) => s === wanted);
           if (!filter) throw new HttpError(400, `unknown status ${wanted}`);
-          return json(deps.todos.list(filter, intParam(url, "limit", 100, 500)));
+          return json(deps.todos.list(filter, limit(req, 100)));
         }),
       },
       "/api/memories": {
         GET: guard((req) => {
           const url = new URL(req.url);
           const query = url.searchParams.get("q") ?? undefined;
-          return json(deps.memories.search(query, intParam(url, "limit", 100, 500)));
+          return json(deps.memories.search(query, limit(req, 100)));
         }),
       },
 
       "/api/sessions": {
         GET: guard((req) => {
           const statusOf = busyConversations();
-          const list = apiSessions.list(intParam(new URL(req.url), "limit", 100, 500));
+          const list = apiSessions.list(limit(req, 100));
           return json(list.map((s) => describe(s, statusOf)));
         }),
         POST: guard(async (req) => {
@@ -278,14 +305,13 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
          * The session as a chat UI first shows it: `history` (finished turns, from Codex) and
          * `live` (turns queued or running). Stream what follows from `cursor`.
          */
-        GET: guard(async (req) => {
-          const session = find(req.params.id);
+        GET: withSession(async ({ session, key }) => {
           // Taken together, before anything is awaited, so no event falls between them.
           const cursor = hub.cursor;
           const live = hub.live(session.id);
           // The turn in progress is in `live`; keep whatever Codex has written of it out.
           const before = hub.runningSince(session.id) ?? now();
-          const threads = sessions.threadsOf(apiConversationKey(session.id));
+          const threads = sessions.threadsOf(key);
           return json({
             session: describe(session),
             history: await history(threads, { before }),
@@ -293,29 +319,25 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
             cursor,
           });
         }),
-        PATCH: guard(async (req) => {
-          const session = find(req.params.id);
+        PATCH: withSession(async ({ session }, req) => {
           const body = await readBody(req, bodies.renameSession);
           return json(describe(apiSessions.rename(session.id, body.title) ?? session));
         }),
-        DELETE: guard((req) => {
-          const session = find(req.params.id);
+        DELETE: withSession(({ session, key }) => {
           if (busyConversations()(session.id) !== "idle") {
             throw new HttpError(409, "a turn is queued or running in this session; stop it first");
           }
           // Its Codex threads stay tracked, so cleanup deletes them from Codex later.
-          sessions.forget(apiConversationKey(session.id));
+          sessions.forget(key);
           apiSessions.delete(session.id);
           hub.drop(session.id);
           return new Response(null, { status: 204 });
         }),
       },
       "/api/sessions/:id/messages": {
-        POST: guard(async (req) => {
-          const session = find(req.params.id);
+        POST: withSession(async ({ session, key }, req) => {
           const body = await readBody(req, bodies.message);
           const { text, user = DEFAULT_USER } = body;
-          const key = apiConversationKey(session.id);
           // Only what was uploaded to this session: already in place, nothing to download.
           const uploads = attachmentsDir(workspace, key);
           const attached: Attachment[] = [];
@@ -325,10 +347,14 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
               throw new HttpError(400, `not a file uploaded to this session: ${given}`);
             }
             const file = Bun.file(path);
-            const mimetype = file.type.split(";")[0];
-            attached.push({ name: basename(path), mimetype, size: file.size, ref: path, path });
+            attached.push({
+              name: basename(path),
+              mimetype: mimeOf(path),
+              size: file.size,
+              ref: path,
+              path,
+            });
           }
-          const files = attached.map((f) => eventFile(f.ref, workspace));
           const messageId = crypto.randomUUID();
           const result = scheduler.submit({
             conversationKey: key,
@@ -342,11 +368,8 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
           if (result.status === "rejected") {
             throw new HttpError(429, "the agent's queue is full; try again in a while");
           }
-          // A turn that started right away has announced the message itself.
-          if (!hub.has(session.id, messageId)) {
-            hub.publish(session.id, messageId, { type: "user_message", text, user, files });
-          }
-          apiSessions.touch(session.id, titleFrom(text || (files[0]?.name ?? "")));
+          announce(hub, workspace, session.id, { ts: messageId, text, user, files: attached });
+          apiSessions.touch(session.id, titleFrom(text || (attached[0]?.name ?? "")));
           return json({ messageId, ...result }, 202);
         }),
       },
@@ -356,8 +379,7 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
          * each). They are saved in the workspace; pass the returned paths as the message's
          * `files`.
          */
-        POST: guard(async (req) => {
-          const session = find(req.params.id);
+        POST: withSession(async ({ key }, req) => {
           const form = await req.formData().catch(() => {
             throw new HttpError(400, "send the files as multipart/form-data, in `file` fields");
           });
@@ -373,16 +395,16 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
               throw new HttpError(413, `${upload.name} is larger than ${limit}`);
             }
           }
-          const dir = attachmentsDir(workspace, apiConversationKey(session.id));
+          const dir = attachmentsDir(workspace, key);
           await mkdir(dir, { recursive: true });
-          const saved = [];
+          const saved: UploadedFile[] = [];
           for (const upload of uploads) {
             const path = await freePath(dir, safeFileName(upload.name));
             await Bun.write(path, upload);
             saved.push({
               ...eventFile(path, workspace),
               size: upload.size,
-              mimetype: Bun.file(path).type.split(";")[0],
+              mimetype: mimeOf(path),
             });
           }
           return json(saved, 201);
@@ -412,10 +434,9 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
         }),
       },
       "/api/sessions/:id/stop": {
-        POST: guard(async (req) => {
-          const session = find(req.params.id);
+        POST: withSession(async ({ key }, req) => {
           const { user = DEFAULT_USER } = await readBody(req, bodies.stop);
-          return json({ stopped: scheduler.cancel(apiConversationKey(session.id), user) });
+          return json({ stopped: scheduler.cancel(key, user) });
         }),
       },
       "/api/sessions/:id/events": {
@@ -424,8 +445,7 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
          * `Last-Event-ID` or `?after=` (a cursor) resumes after that event; without one the
          * stream starts with the turns in progress.
          */
-        GET: guard((req, server) => {
-          const session = find(req.params.id);
+        GET: withSession(({ session }, req, server) => {
           const after =
             req.headers.get("last-event-id") ??
             new URL(req.url).searchParams.get("after") ??

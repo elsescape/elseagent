@@ -20,49 +20,28 @@ function Overlay({ className, ...props }: React.ComponentProps<typeof DialogPrim
   );
 }
 
-/** A centered dialog. */
-export function DialogContent({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) {
+type ContentProps = React.ComponentProps<typeof DialogPrimitive.Content>;
+
+/** A dialog's panel over the dimmed page; `base` says where it sits and how it arrives. */
+function Panel({ base, className, ...props }: ContentProps & { base: string }) {
   return (
     <DialogPrimitive.Portal>
       <Overlay />
-      <DialogPrimitive.Content
-        className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-background p-6 shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-md",
-          className,
-        )}
-        {...props}
-      >
-        {children}
-      </DialogPrimitive.Content>
+      <DialogPrimitive.Content className={cn(base, className)} {...props} />
     </DialogPrimitive.Portal>
   );
 }
 
+const CENTERED =
+  "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-background p-6 shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-md";
+const FROM_LEFT =
+  "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85%] flex-col border-r bg-sidebar shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:animate-in data-[state=open]:slide-in-from-left";
+
+/** A centered dialog. */
+export const DialogContent = (props: ContentProps) => <Panel base={CENTERED} {...props} />;
+
 /** A panel sliding in from the left (the session list on a phone). */
-export function SheetContent({
-  className,
-  children,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content>) {
-  return (
-    <DialogPrimitive.Portal>
-      <Overlay />
-      <DialogPrimitive.Content
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85%] flex-col border-r bg-sidebar shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:animate-in data-[state=open]:slide-in-from-left",
-          className,
-        )}
-        {...props}
-      >
-        {children}
-      </DialogPrimitive.Content>
-    </DialogPrimitive.Portal>
-  );
-}
+export const SheetContent = (props: ContentProps) => <Panel base={FROM_LEFT} {...props} />;
 
 export function DialogTitle({
   className,

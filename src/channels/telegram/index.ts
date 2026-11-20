@@ -1,7 +1,7 @@
 import { ConfigError, type TelegramConfig } from "../../config/index.ts";
 import { dispatchMessage } from "../dispatch.ts";
 import {
-  type Channel,
+  type ConnectedChannel,
   type IncomingMessage,
   type Logger,
   type MessageHandler,
@@ -39,7 +39,7 @@ export interface TelegramIdentity {
   topicsEnabled: boolean;
 }
 
-export interface TelegramBot extends Channel {
+export interface TelegramBot extends ConnectedChannel {
   platform: "telegram";
   identity: TelegramIdentity;
 }

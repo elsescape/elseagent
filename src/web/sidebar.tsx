@@ -1,5 +1,5 @@
 import { LoaderCircle, Monitor, Moon, SquarePen, Sun } from "lucide-react";
-import type { AgentStatus, Session } from "./client.ts";
+import { type AgentStatus, type Session, titleOf } from "./client.ts";
 import { Button } from "./components/ui/button.tsx";
 import { cn } from "./lib/utils.ts";
 import { THEMES, type Theme } from "./theme.ts";
@@ -84,7 +84,7 @@ export function SidebarContent({
                   session.id === activeId && "bg-accent font-medium",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{session.title || "New chat"}</span>
+                <span className="min-w-0 flex-1 truncate">{titleOf(session)}</span>
                 {session.status !== "idle" && (
                   <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
                 )}

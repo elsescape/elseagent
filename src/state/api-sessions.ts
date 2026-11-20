@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { StateDb } from "./db.ts";
 import { apiSessions } from "./schema.ts";
 
@@ -49,16 +49,17 @@ export class ApiSessionStore {
 
   /** Something happened in the session. `title` names it if it has no title yet. */
   touch(id: string, title = ""): void {
-    const session = this.get(id);
-    if (!session) return;
     this.db
       .update(apiSessions)
-      .set({ updatedAt: this.now(), title: session.title || title })
+      .set({
+        updatedAt: this.now(),
+        title: sql`CASE WHEN ${apiSessions.title} = '' THEN ${title} ELSE ${apiSessions.title} END`,
+      })
       .where(eq(apiSessions.id, id))
       .run();
   }
 
-  delete(id: string): boolean {
-    return this.db.delete(apiSessions).where(eq(apiSessions.id, id)).returning().all().length > 0;
+  delete(id: string): void {
+    this.db.delete(apiSessions).where(eq(apiSessions.id, id)).run();
   }
 }

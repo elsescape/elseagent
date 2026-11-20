@@ -1,5 +1,7 @@
 import type { ThreadItem } from "@openai/codex-sdk";
+import { isReplyJson } from "../agent/reply.ts";
 import type { EventFile, SessionEvent, TurnStatus } from "../api/events.ts";
+import { DAY_MS } from "../util/time.ts";
 
 /** What the chat shows, in order, built from a session's events. */
 export type Entry =
@@ -14,17 +16,6 @@ export interface Timeline {
   status: string;
   /** Whether a turn is queued or running. */
   busy: boolean;
-}
-
-/** Codex's final message is the reply as JSON; the `reply` event shows it instead. */
-function isStructuredReply(text: string): boolean {
-  if (!text.trimStart().startsWith("{")) return false;
-  try {
-    const parsed = JSON.parse(text);
-    return typeof parsed?.message === "string" && "reply" in parsed;
-  } catch {
-    return false;
-  }
 }
 
 export function buildTimeline(events: readonly SessionEvent[]): Timeline {
@@ -56,7 +47,8 @@ export function buildTimeline(events: readonly SessionEvent[]): Timeline {
           break;
         }
         const { item } = codex;
-        if (item.type === "agent_message" && isStructuredReply(item.text)) break;
+        // Codex's final message is the reply as JSON; the `reply` event shows it instead.
+        if (item.type === "agent_message" && isReplyJson(item.text)) break;
         if ((item.type === "reasoning" || item.type === "agent_message") && !item.text.trim())
           break;
         const id = `${event.messageId}:${item.id}`;
@@ -132,11 +124,10 @@ export function groupByDay<T extends { updatedAt: number }>(
   now = Date.now(),
 ): { label: string; sessions: T[] }[] {
   const today = new Date(now).setHours(0, 0, 0, 0);
-  const DAY = 24 * 60 * 60 * 1000;
   const groups = [
     { label: "Today", from: today },
-    { label: "Yesterday", from: today - DAY },
-    { label: "Previous 7 days", from: today - 7 * DAY },
+    { label: "Yesterday", from: today - DAY_MS },
+    { label: "Previous 7 days", from: today - 7 * DAY_MS },
     { label: "Older", from: Number.NEGATIVE_INFINITY },
   ].map((g) => ({ ...g, sessions: [] as T[] }));
   for (const session of sessions) {

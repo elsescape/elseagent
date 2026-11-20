@@ -17,8 +17,18 @@ export function stopReason(signal: AbortSignal): StopReason | null {
     : { kind: "shutdown" };
 }
 
-/** Handles one message (one Codex turn). `signal` aborts on shutdown or cancellation. */
-export type TurnRunner = (message: QueuedMessage, signal: AbortSignal) => Promise<void>;
+/** How a Codex turn ended. `stopped`: cancelled, superseded, or cut short by a shutdown. */
+export type TurnOutcome = "completed" | "failed" | "timed_out" | "stopped";
+
+/**
+ * Handles one message (one Codex turn) and says how the turn ended; nothing when no turn ran
+ * (a command, a message that needed no answer). `signal` aborts on shutdown or cancellation.
+ */
+export type TurnRunner = (
+  message: QueuedMessage,
+  signal: AbortSignal,
+  // biome-ignore lint/suspicious/noConfusingVoidType: a runner may simply return nothing
+) => Promise<TurnOutcome | void>;
 
 export type SubmitResult =
   | { status: "started" }

@@ -4,7 +4,9 @@ import type { RecordSource } from "./memory.ts";
 import { TODO_STATUSES, todos } from "./schema.ts";
 
 export type TodoStatus = (typeof TODO_STATUSES)[number];
-export type TodoFilter = TodoStatus | "active" | "all";
+/** What a list of todos can be narrowed to: one status, the ones still open, or everything. */
+export const TODO_FILTERS = ["active", "all", ...TODO_STATUSES] as const;
+export type TodoFilter = (typeof TODO_FILTERS)[number];
 type TodoUpdate = { title?: string; details?: string; status?: TodoStatus };
 
 export { TODO_STATUSES };

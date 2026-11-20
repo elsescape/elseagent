@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatScheduledReply, parseReply } from "./reply.ts";
+import { formatScheduledReply, isReplyJson, parseReply } from "./reply.ts";
 
 describe("parseReply", () => {
   test("reads the structured reply", () => {
@@ -86,4 +86,12 @@ describe("formatScheduledReply", () => {
       "⏰ **!channel x report**\n\nok",
     );
   });
+});
+
+test("isReplyJson tells the final response from what Codex says along the way", () => {
+  expect(isReplyJson('{"reply":true,"message":"Done","choices":[],"files":[]}')).toBe(true);
+  expect(isReplyJson('  {"message":""}')).toBe(true);
+  for (const other of ["I'll look at it.", '{"note":"no message"}', "{broken", "[1]", "null", ""]) {
+    expect(isReplyJson(other)).toBe(false);
+  }
 });

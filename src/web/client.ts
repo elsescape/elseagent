@@ -1,14 +1,13 @@
-import type { EventFile, LiveEvent, SessionEvent } from "../api/events.ts";
+import type { LiveEvent, SessionEvent, SessionStatus, UploadedFile } from "../api/events.ts";
+import type { ApiSession } from "../state/api-sessions.ts";
 
 /** The browser's side of the HTTP API (see src/api/server.ts). */
 
-export interface Session {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  status: "idle" | "queued" | "running";
-}
+/** A session as the API lists it. */
+export type Session = ApiSession & { status: SessionStatus };
+
+/** What a session is called on the page; it has no title until its first message. */
+export const titleOf = (session: Session | undefined) => session?.title || "New chat";
 
 export interface SessionView {
   session: Session;
@@ -38,28 +37,30 @@ const headers = (): Record<string, string> => {
   return token ? { authorization: `Bearer ${token}` } : {};
 };
 
-/** The JSON of a response, or the error it reports. */
-async function check<T>(res: Response): Promise<T> {
+/** Call the API with the saved token. A missing session or a refused token is thrown. */
+async function call(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(`/api${path}`, { ...init, headers: { ...headers(), ...init.headers } });
   if (res.status === 401) throw new Unauthorized();
   if (res.status === 404) throw new NotFound();
+  return res;
+}
+
+/** The JSON of a response, or the error it reports. */
+async function json<T>(res: Response): Promise<T> {
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `the request failed (${res.status})`);
   return data as T;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  return check(
-    await fetch(`/api${path}`, {
+const request = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
+  json(
+    await call(path, {
       method,
-      headers: {
-        ...headers(),
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
+      headers: body === undefined ? {} : { "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     }),
   );
-}
 
 export const api = {
   status: () => request<AgentStatus>("GET", "/status"),
@@ -70,22 +71,23 @@ export const api = {
   remove: (id: string) => request<void>("DELETE", `/sessions/${id}`),
   send: (id: string, text: string, files: string[] = []) =>
     request<unknown>("POST", `/sessions/${id}/messages`, { text, files }),
-  /** Save files in the session's attachments; their paths go with the next message. */
-  upload: async (id: string, files: File[]): Promise<EventFile[]> => {
+  stop: (id: string) => request<unknown>("POST", `/sessions/${id}/stop`, {}),
+  /** Save a file in the session's attachments; its path goes with the next message. */
+  upload: async (id: string, file: File): Promise<UploadedFile> => {
     const body = new FormData();
-    for (const file of files) body.append("file", file);
-    return check(
-      await fetch(`/api/sessions/${id}/files`, { method: "POST", headers: headers(), body }),
+    body.append("file", file);
+    const [saved] = await json<UploadedFile[]>(
+      await call(`/sessions/${id}/files`, { method: "POST", body }),
     );
+    if (!saved) throw new Error("the upload was not saved");
+    return saved;
   },
   /** A workspace file's content. (A link can't carry the bearer token; `fetch` can.) */
   file: async (path: string): Promise<Blob> => {
-    const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: headers() });
-    if (res.status === 401) throw new Unauthorized();
+    const res = await call(`/files?path=${encodeURIComponent(path)}`);
     if (!res.ok) throw new NotFound();
     return res.blob();
   },
-  stop: (id: string) => request<unknown>("POST", `/sessions/${id}/stop`, {}),
 };
 
 /**
@@ -100,12 +102,7 @@ export async function followEvents(
   onEvent: (event: LiveEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`/api/sessions/${id}/events?after=${encodeURIComponent(cursor)}`, {
-    headers: headers(),
-    signal,
-  });
-  if (res.status === 401) throw new Unauthorized();
-  if (res.status === 404) throw new NotFound();
+  const res = await call(`/sessions/${id}/events?after=${encodeURIComponent(cursor)}`, { signal });
   if (!res.ok || !res.body) throw new Error(`the event stream failed (${res.status})`);
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";

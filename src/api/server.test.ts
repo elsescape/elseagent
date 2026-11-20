@@ -81,19 +81,21 @@ function setup({
       const reason = stopReason(signal);
       stopped.push(reason?.kind === "cancelled" ? reason.by : "shutdown");
       await reply.post("Stopped.");
-    } else if (outcome === "fail") {
-      await reply.post("The task failed.");
-      await reply.react("failed");
-    } else {
-      const made = join(workspace, "out", "a.txt");
-      await Bun.write(made, "made by the agent");
-      const elsewhere = { name: "b.txt", path: "/elsewhere/b.txt" };
-      await reply.post(
-        message.text.toUpperCase(),
-        ["More"],
-        [{ name: "a.txt", path: made }, elsewhere],
-      );
+      return "stopped" as const;
     }
+    if (outcome === "fail") {
+      await reply.post("The task failed.");
+      return "failed" as const;
+    }
+    const made = join(workspace, "out", "a.txt");
+    await Bun.write(made, "made by the agent");
+    const elsewhere = { name: "b.txt", path: "/elsewhere/b.txt" };
+    await reply.post(
+      message.text.toUpperCase(),
+      ["More"],
+      [{ name: "a.txt", path: made }, elsewhere],
+    );
+    return "completed" as const;
   };
   const scheduler = new Scheduler(queue, chat.observe(run), { maxConcurrent: 1, maxQueue });
   const admin = new Admin({
@@ -664,7 +666,7 @@ describe("the API channel", () => {
     };
     const seen: LiveEvent[] = [];
     hub.subscribe(session.id, undefined, (e) => seen.push(e));
-    await chat.observe(async () => {})(message, new AbortController().signal);
+    await chat.observe(async () => undefined)(message, new AbortController().signal);
     expect(types(seen)).toEqual(["user_message", "turn_started", "turn_ended"]);
     expect(seen[0]).toMatchObject({
       text: "still here",
@@ -672,8 +674,14 @@ describe("the API channel", () => {
       files: [{ name: "a.png", path: "attachments/s/a.png" }],
     });
     // A scheduled run and other channels' turns are left alone.
-    await chat.observe(async () => {})({ ...message, scheduleId: 3 }, new AbortController().signal);
-    await chat.observe(async () => {})({ ...message, channel: "C1" }, new AbortController().signal);
+    await chat.observe(async () => undefined)(
+      { ...message, scheduleId: 3 },
+      new AbortController().signal,
+    );
+    await chat.observe(async () => undefined)(
+      { ...message, channel: "C1" },
+      new AbortController().signal,
+    );
     expect(seen).toHaveLength(3);
   });
 });

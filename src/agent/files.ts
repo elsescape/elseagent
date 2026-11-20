@@ -100,6 +100,11 @@ export function describeFiles(files: SavedFile[], workspace: string): string[] {
   });
 }
 
+/** The path on a line `describeFiles` wrote for a saved file; null for any other line. */
+export function attachedFilePath(line: string): string | null {
+  return /^\[attached file: (.+?)(?: \([^()]*\))?\]$/.exec(line)?.[1] ?? null;
+}
+
 export const isImage = (f: SavedFile) =>
   f.path !== undefined && f.mimetype !== undefined && IMAGE_TYPES.has(f.mimetype);
 

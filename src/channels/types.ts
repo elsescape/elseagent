@@ -141,20 +141,14 @@ export interface ThreadContext {
 
 export const NO_CONTEXT: ThreadContext = { messages: [], omitted: 0 };
 
-/** A source that delivers platform events as normalized agent messages. */
-export interface IncomingChannel {
+/**
+ * Somewhere the agent holds conversations: what the queue, the turn runner and schedules need
+ * to answer a message there, including one received before a restart.
+ */
+export interface Channel {
   readonly platform: string;
   /** Shown in logs, e.g. "slack @reviewer (U0123)". */
   readonly label: string;
-  /** Connect and start delivering messages to `onMessage`. */
-  start(onMessage: MessageHandler): Promise<void>;
-  stop(): Promise<void>;
-}
-
-/** A chat adapter that can also address replies to persisted messages and schedules. */
-export interface Channel extends IncomingChannel {
-  /** Stable, filename-safe identity used when this is the agent's primary channel. */
-  readonly stateKey: string;
   /** Channel-specific MCP tools, registered only while this adapter is enabled. */
   readonly registerMcpTools?: ToolGroup;
   /** What Codex is told about conversations in this channel (formatting, threads, schedules). */
@@ -175,4 +169,17 @@ export interface Channel extends IncomingChannel {
   download(file: Attachment, dest: string, signal?: AbortSignal): Promise<void>;
   /** Make sure the agent can post in a channel (name or ID); returns its ID. */
   ensureChannel(ref: string): Promise<string>;
+}
+
+/**
+ * A channel with a connection of its own to a chat service (Slack, Telegram): it has to be
+ * started and stopped, and delivers that service's messages. (The HTTP API is a channel
+ * without one: its messages arrive as requests.)
+ */
+export interface ConnectedChannel extends Channel {
+  /** Stable, filename-safe identity: the first connected channel names the agent's database. */
+  readonly stateKey: string;
+  /** Connect and start delivering messages to `onMessage`. */
+  start(onMessage: MessageHandler): Promise<void>;
+  stop(): Promise<void>;
 }

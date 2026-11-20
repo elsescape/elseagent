@@ -17,6 +17,7 @@ import {
   NotFound,
   type Session,
   saveToken,
+  titleOf,
   Unauthorized,
 } from "./client.ts";
 import { Button } from "./components/ui/button.tsx";
@@ -29,7 +30,7 @@ import {
   SheetContent,
 } from "./components/ui/dialog.tsx";
 import { Composer } from "./composer.tsx";
-import { isPicture, type Pending } from "./files.tsx";
+import { forgetPictures, isPicture, type Pending } from "./files.tsx";
 import { BlockView } from "./messages.tsx";
 import { SidebarContent } from "./sidebar.tsx";
 import { useTheme } from "./theme.ts";
@@ -84,9 +85,7 @@ function Title({ session, onRename }: { session: Session; onRename: (title: stri
   if (draft === null) {
     return (
       <>
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
-          {session.title || "New chat"}
-        </h1>
+        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{titleOf(session)}</h1>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -133,17 +132,25 @@ function App() {
   const [pending, setPending] = useState<Pending[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
 
-  /** Run an API call; a missing token asks for one, anything else is shown. */
-  const attempt = useCallback(async <T,>(call: () => Promise<T>): Promise<T | undefined> => {
-    try {
-      const result = await call();
-      setError("");
-      return result;
-    } catch (err) {
-      if (err instanceof Unauthorized) setLocked(true);
-      else setError((err as Error).message);
-    }
+  /** What a failed call means for the page: a refused token asks for it, the rest is shown. */
+  const report = useCallback((err: unknown, message = (err as Error).message) => {
+    if (err instanceof Unauthorized) setLocked(true);
+    else setError(message);
   }, []);
+
+  /** Run an API call; its failure is reported, and the result is then undefined. */
+  const attempt = useCallback(
+    async <T,>(call: () => Promise<T>): Promise<T | undefined> => {
+      try {
+        const result = await call();
+        setError("");
+        return result;
+      } catch (err) {
+        report(err);
+      }
+    },
+    [report],
+  );
 
   const refresh = useCallback(async () => {
     const [list, agent] = await Promise.all([attempt(api.sessions), attempt(api.status)]);
@@ -154,7 +161,7 @@ function App() {
   useEffect(() => {
     if (locked) return;
     void refresh();
-    const timer = setInterval(() => void refresh(), REFRESH_MS);
+    const timer = setInterval(() => !document.hidden && void refresh(), REFRESH_MS);
     return () => clearInterval(timer);
   }, [locked, refresh]);
 
@@ -191,15 +198,18 @@ function App() {
           );
         } catch (err) {
           if (stop.signal.aborted) return;
-          if (err instanceof Unauthorized) return setLocked(true);
           if (err instanceof NotFound) return setActiveId(null);
-          setError("Lost the connection to the agent. Reconnecting…");
+          report(err, "Lost the connection to the agent. Reconnecting…");
+          if (err instanceof Unauthorized) return;
         }
         await new Promise((resolve) => setTimeout(resolve, RECONNECT_MS));
       }
     })();
-    return () => stop.abort();
-  }, [activeId, locked, refresh]);
+    return () => {
+      stop.abort();
+      forgetPictures();
+    };
+  }, [activeId, locked, refresh, report]);
 
   const timeline = useMemo(() => buildTimeline(events), [events]);
   const blocks = useMemo(() => groupSteps(timeline.entries, timeline.busy), [timeline]);
@@ -216,16 +226,18 @@ function App() {
     if (el) setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_PX);
   };
 
-  const clearPending = () =>
+  /** Drop picked files (all of them, or one), letting go of their previews. */
+  const dropPending = (key?: string) =>
     setPending((files) => {
-      for (const p of files) if (p.preview) URL.revokeObjectURL(p.preview);
-      return [];
+      const dropped = (p: Pending) => key === undefined || p.key === key;
+      for (const p of files) if (dropped(p) && p.preview) URL.revokeObjectURL(p.preview);
+      return files.filter((p) => !dropped(p));
     });
 
   const select = (id: string | null) => {
     setActiveId(id);
     setMenuOpen(false);
-    clearPending(); // they were uploaded to the session being left
+    dropPending(); // they were uploaded to the session being left
   };
 
   /** The session messages go to: the open one, or a new one for a first message. */
@@ -248,16 +260,17 @@ function App() {
     const update = (key: string, change: Partial<Pending>) =>
       setPending((now) => now.map((p) => (p.key === key ? { ...p, ...change } : p)));
     const id = await ensureSession();
-    for (const { key, file } of picked) {
-      try {
-        if (!id) throw new Error("no session to upload to");
-        const [saved] = await api.upload(id, [file]);
-        update(key, saved ? { path: saved.path } : { error: "The upload was not saved" });
-      } catch (err) {
-        if (err instanceof Unauthorized) return setLocked(true);
-        update(key, { error: (err as Error).message });
-      }
-    }
+    await Promise.all(
+      picked.map(async ({ key, file }) => {
+        try {
+          if (!id) throw new Error("no session to upload to");
+          update(key, { path: (await api.upload(id, file)).path });
+        } catch (err) {
+          if (err instanceof Unauthorized) report(err);
+          update(key, { error: (err as Error).message || "The upload failed" });
+        }
+      }),
+    );
   };
 
   const send = async (text: string, files = pending) => {
@@ -266,7 +279,7 @@ function App() {
     const id = await ensureSession();
     if (!id) return;
     setFollowing(true);
-    clearPending();
+    dropPending();
     await attempt(() => api.send(id, text.trim(), paths));
     void refresh();
   };
@@ -311,7 +324,7 @@ function App() {
       busy={timeline.busy}
       pending={pending}
       onAttach={attach}
-      onRemove={(key) => setPending((now) => now.filter((p) => p.key !== key))}
+      onRemove={dropPending}
       onSend={send}
       onStop={() => activeId && void attempt(() => api.stop(activeId))}
     />
@@ -428,8 +441,8 @@ function App() {
           <div className="space-y-2">
             <DialogTitle>Delete this conversation?</DialogTitle>
             <DialogDescription>
-              “{active?.title || "New chat"}” is removed from the list and the agent forgets it.
-              Files it made in the workspace stay.
+              “{titleOf(active)}” is removed from the list and the agent forgets it. Files it made
+              in the workspace stay.
             </DialogDescription>
           </div>
           <div className="flex justify-end gap-2">
