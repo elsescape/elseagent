@@ -31,7 +31,7 @@ export const titleFrom = (text: string) =>
 
 const API_INSTRUCTIONS = `This conversation comes through elseagent's HTTP API, from a chat client with one user. Each session is a separate conversation with you.
 
-The user can attach files and images to a message. They can download the files you send back only from inside your working directory, so write anything you put in "files" there.
+The user can attach files and images to a message. Save generated files inside your working directory and include their paths in the final response's "files" field. The API returns those paths in the reply event so the client can download the files through the API.
 
 Scheduled results open a new session (leave \`channel\` out to use it); the user follows up in that session.`;
 

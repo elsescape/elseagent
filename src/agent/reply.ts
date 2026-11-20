@@ -32,8 +32,9 @@ export const REPLY_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description:
-        "Paths of files to send with your message (relative to the working directory, or " +
-        "absolute), e.g. a chart, report or export you made; empty otherwise.",
+        "When delivering a generated file such as a chart, report or export, put its local path " +
+        "here (relative to the working directory or absolute) so the channel can deliver it. " +
+        "Keep the message body free of local paths and internal download URLs. Empty if there are no files.",
     },
   },
   required: ["reply", "message", "choices", "files"],
