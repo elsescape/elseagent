@@ -9,7 +9,7 @@ import { registerService } from "./service.ts";
 export function buildProgram(): Command {
   const program = new Command()
     .name("elseagent")
-    .description("Codex agent for the web, Slack and Telegram")
+    .description("Codex agent with an HTTP API, for Slack and Telegram")
     .version(pkg.version ?? "0.0.0");
 
   program
@@ -37,7 +37,7 @@ export function buildProgram(): Command {
       await Bun.write(out, CONFIG_TEMPLATE);
       console.log(`Wrote ${out}`);
       console.log(
-        "It serves the web chat and API as it is. To use Slack or Telegram, uncomment " +
+        "It serves the HTTP API as it is. To use Slack or Telegram, uncomment " +
           "channels in it. Then run:",
       );
       const isDefault = out === resolve(expandHome(DEFAULT_CONFIG_PATH));

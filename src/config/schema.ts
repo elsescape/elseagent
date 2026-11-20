@@ -152,10 +152,8 @@ const apiSchema = z.object(
       .min(16, "api.token must be at least 16 characters")
       .refine((v) => !v.includes(PLACEHOLDER), "api.token is still the placeholder")
       .optional(),
-    // Serve the web chat at `/`, next to the API.
-    webui: z.boolean("api.webui must be true or false").default(true),
   },
-  { error: "api must be a section with enabled, host, port, token and webui" },
+  { error: "api must be a section with enabled, host, port and token" },
 );
 
 export const configSchema = agentSchema

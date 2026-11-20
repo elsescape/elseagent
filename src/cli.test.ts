@@ -84,7 +84,7 @@ describe("cli", () => {
     const res = run(["run", "-c", "~/.elseagent/config.yml", "--dry-run"], dir);
     expect(res.code).toBe(0);
     expect(res.stdout).toMatch(/channels: +\(none\)\n/);
-    expect(res.stdout).toMatch(/api: +http:\/\/127\.0\.0\.1:2923\/api \(no token, web chat on\)\n/);
+    expect(res.stdout).toMatch(/api: +http:\/\/127\.0\.0\.1:2923\/api \(no token\)\n/);
   });
 
   test("run with -c reports validation errors", async () => {

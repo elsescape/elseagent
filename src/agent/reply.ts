@@ -55,12 +55,6 @@ function replyJson(text: string): Partial<AgentReply> | null {
   }
 }
 
-/**
- * Whether a message of Codex's is its final response in the reply schema, rather than
- * something it said along the way. (A chat UI shows the parsed reply instead of the JSON.)
- */
-export const isReplyJson = (text: string) => replyJson(text) !== null;
-
 /** Parse Codex's final response. Anything that isn't the expected JSON is posted as plain text. */
 export function parseReply(finalResponse: string): AgentReply {
   const raw = replyJson(finalResponse);

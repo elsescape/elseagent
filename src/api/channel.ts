@@ -29,13 +29,11 @@ const MAX_TITLE = 80;
 export const titleFrom = (text: string) =>
   truncate((text.trim().split("\n", 1)[0] ?? "").replace(/[*_`#]/g, "").trim(), MAX_TITLE);
 
-const API_INSTRUCTIONS = `This conversation is in elseagent's web chat, with one user. Each session of the chat is a separate conversation with you. The chat renders full Markdown, so tables are fine here.
-
-The user sees your commands, tool calls and file changes as you work, so do not repeat them in your reply.
+const API_INSTRUCTIONS = `This conversation comes through elseagent's HTTP API, from a chat client with one user. Each session is a separate conversation with you.
 
 The user can attach files and images to a message. They can download the files you send back only from inside your working directory, so write anything you put in "files" there.
 
-Scheduled results open a new session in the web chat (leave \`channel\` out to use it); the user follows up in that session.`;
+Scheduled results open a new session (leave \`channel\` out to use it); the user follows up in that session.`;
 
 /** The session a queued message belongs to; null for a scheduled run, which has none yet. */
 function sessionOf(message: Pick<QueuedMessage, "channel" | "threadTs" | "scheduleId">) {
@@ -108,7 +106,7 @@ export function createApiChat({
         sessions.touch(sessionId);
         return sessionId;
       },
-      // The page shows a turn's state from its events; there is no message to put a mark on.
+      // Clients follow a turn through its events; there is no message to put a mark on.
       async react() {},
       async unreact() {},
       async setStatus(text) {

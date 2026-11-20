@@ -209,7 +209,6 @@ export async function startApp(
       );
       defer("API server", endpoint.stop);
       console.log(`api: listening on ${endpoint.url}`);
-      if (endpoint.webui) console.log(`web chat: ${endpoint.webui}`);
     }
 
     const onMessage = createMessageHandler({ scheduler, sessions });
@@ -243,11 +242,8 @@ export async function startApp(
   });
 }
 
-const describeApi = ({ enabled, host, port, token, webui }: ApiConfig) =>
-  enabled
-    ? `http://${host}:${port}/api (${token ? "token required" : "no token"}, ` +
-      `web chat ${webui ? "on" : "off"})`
-    : "off";
+const describeApi = ({ enabled, host, port, token }: ApiConfig) =>
+  enabled ? `http://${host}:${port}/api (${token ? "token required" : "no token"})` : "off";
 
 /** Start the API server; a port that can't be used is a config problem, said plainly. */
 function listen<T>({ host, port }: ApiConfig, start: () => T): T {
