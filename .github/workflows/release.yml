@@ -65,8 +65,8 @@ jobs:
           mv package.json.new package.json
       - name: Build
         run: >
-          bun scripts/build.ts --release
-          --target=bun-${{ matrix.target }} --outfile=dist/elseagent
+          bun build src/index.ts --compile --minify --sourcemap
+          --target=bun-${{ matrix.target }} --outfile dist/elseagent
       - name: Check that it starts
         if: matrix.native
         run: test "$(dist/elseagent --version)" = "$VERSION"

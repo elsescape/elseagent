@@ -19,13 +19,12 @@ import type { MessageQueue, SessionStore } from "../state/index.ts";
 import type { MemoryStore } from "../state/memory.ts";
 import { TODO_FILTERS, type TodoStore } from "../state/todos.ts";
 import { formatSize } from "../util/text.ts";
-import webui from "../web/index.html";
 import { API_CHAT, announce, apiConversationKey, eventFile, titleFrom } from "./channel.ts";
 import type { EventHub, LiveEvent, SessionEvent, SessionStatus, UploadedFile } from "./events.ts";
 import { type HistoryOptions, threadHistory } from "./history.ts";
 
 /** Who a message is from when the client doesn't say. */
-const DEFAULT_USER = "web";
+const DEFAULT_USER = "api";
 const MAX_MESSAGE_CHARS = 100_000;
 /** Room for the longest message in any encoding; a JSON body is never larger. */
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -44,8 +43,6 @@ export interface ApiServerDeps {
   token?: string;
   /** Codex's working directory: uploads are saved in it, and its files can be downloaded. */
   workspace: string;
-  /** Serve the web chat at `/`. */
-  webui?: boolean;
   admin: Pick<Admin, "status" | "listQueue" | "listSessions" | "scheduleList" | "usage">;
   scheduler: Pick<Scheduler, "submit" | "cancel" | "runningTurns">;
   queue: Pick<MessageQueue, "conversations">;
@@ -64,8 +61,6 @@ export interface ApiServerDeps {
 export interface ApiEndpoint {
   /** Base URL of the API, e.g. `http://127.0.0.1:2923/api`. */
   url: string;
-  /** Where the web chat is, when it is served. */
-  webui?: string;
   stop(): Promise<void>;
 }
 
@@ -231,12 +226,8 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
   const server = Bun.serve({
     hostname: deps.host,
     port: deps.port,
-    // Bundle the web chat once, minified, the way the compiled binary embeds it.
-    development: false,
     maxRequestBodySize: MAX_UPLOAD_BYTES,
     routes: {
-      // The page is public; everything it loads goes through the API and its token.
-      "/": deps.webui ? webui : false,
       "/api/status": {
         GET: guard(() =>
           json({
@@ -489,7 +480,6 @@ export function startApiServer(deps: ApiServerDeps): ApiEndpoint {
   const origin = `http://${server.hostname}:${server.port}`;
   return {
     url: `${origin}/api`,
-    webui: deps.webui ? `${origin}/` : undefined,
     stop: () => server.stop(true),
   };
 }

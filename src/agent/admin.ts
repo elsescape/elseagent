@@ -222,7 +222,7 @@ export class Admin {
     const where = schedule.channel.startsWith(TELEGRAM_PREFIX)
       ? "a new topic of the Telegram chat"
       : schedule.channel.startsWith(API_PREFIX)
-        ? "a new session of the web chat"
+        ? "a new API session"
         : `<#${schedule.channel}>`;
     return `Queued a run of schedule #${id} "${schedule.name}"; its result is posted in ${where}.`;
   }

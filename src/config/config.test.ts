@@ -26,10 +26,10 @@ async function writeConfig(name: string, content: string): Promise<string> {
 }
 
 describe("loadConfig", () => {
-  test("loads the template as it is: the API and web chat, no chat service", async () => {
+  test("loads the template as it is: the API, no chat service", async () => {
     const config = await loadConfig(await writeConfig("template.yaml", CONFIG_TEMPLATE));
     expect(config.channels).toEqual({});
-    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923, webui: true });
+    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923 });
     expect(config.maxConcurrent).toBe(32);
     expect(config.codex).toEqual({});
   });
@@ -70,7 +70,7 @@ describe("loadConfig", () => {
 
   test("the api is on by default and is enough without a channel", async () => {
     const config = await loadConfig(await writeConfig("api-only.yaml", "maxConcurrent: 2\n"));
-    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923, webui: true });
+    expect(config.api).toEqual({ enabled: true, host: "127.0.0.1", port: 2923 });
     expect(config.channels).toEqual({});
   });
 
@@ -90,10 +90,7 @@ describe("loadConfig", () => {
       host: "0.0.0.0",
       port: 8080,
       token: "0123456789abcdef",
-      webui: true,
     });
-    const plain = await writeConfig("api-plain.yaml", "api:\n  webui: false\n");
-    expect((await loadConfig(plain)).api.webui).toBe(false);
     // Off, it is not checked.
     const disabled = await writeConfig(
       "api-off.yaml",
@@ -254,9 +251,9 @@ describe(".config.example.yaml", () => {
     expect(example).toContain(DEFAULT_CONFIG_PATH);
   });
 
-  test("only enables the local API and web chat by default", () => {
+  test("only enables the local API by default", () => {
     expect(Bun.YAML.parse(CONFIG_TEMPLATE)).toEqual({
-      api: { enabled: true, host: "127.0.0.1", port: 2923, webui: true },
+      api: { enabled: true, host: "127.0.0.1", port: 2923 },
     });
   });
 

@@ -2,13 +2,13 @@
 
 # elseagent
 
-A [Codex](https://github.com/openai/codex) agent with a web chat and an HTTP API, and
-optionally in Slack and Telegram. Ask it to work in a session, thread or DM, share files,
-or run a task on a schedule.
+A [Codex](https://github.com/openai/codex) agent for Slack and Telegram, with an HTTP API
+for your own dashboards and chat clients. Ask it to work in a thread, DM or API session,
+share files, or run a task on a schedule.
 
 [Install](#local-installation) · [User service](#run-as-a-user-service) · [Configuration](#configuration) · [Slack](#slack) ·
-[Telegram](#telegram) · [Usage](#usage) · [Web chat](#web-chat) · [HTTP API](#http-api) ·
-[Deployment](#deployment) · [Development](#development)
+[Telegram](#telegram) · [Usage](#usage) · [HTTP API](#http-api) · [Deployment](#deployment) ·
+[Development](#development)
 
 ## Local installation
 
@@ -19,9 +19,9 @@ brew install elsescape/tap/elseagent
 elseagent init
 ```
 
-Run `elseagent run` and open the [web chat](#web-chat) at `http://127.0.0.1:2923/`. To use
-Slack or Telegram as well, uncomment `channels` in `~/.elseagent/config.yml` and fill in
-the credentials.
+Run `elseagent run`: the agent serves its [HTTP API](#http-api) at
+`http://127.0.0.1:2923/api`. To use Slack or Telegram, uncomment `channels` in
+`~/.elseagent/config.yml` and fill in the credentials.
 Use `brew update && brew upgrade elseagent` to upgrade. Builds are also available from
 [GitHub Releases](https://github.com/elsescape/elseagent/releases).
 
@@ -59,9 +59,9 @@ Run `service install` again if those paths change.
 ## Configuration
 
 [.config.example.yaml](.config.example.yaml) lists every setting and doubles as the template
-for `elseagent init`. As generated, the agent is reached through its [web chat](#web-chat)
-and [HTTP API](#http-api) only. Slack and Telegram are optional: uncomment either
-section under `channels`, or both.
+for `elseagent init`. As generated, the agent is reached through its
+[HTTP API](#http-api) only. Slack and Telegram are optional: uncomment either section
+under `channels`, or both.
 
 - **Agent** · Set its instructions with `prompt`, its working directory with `workspace`
   (default `~/workspace`), and the time zone for schedules with `timezone` (default system
@@ -73,10 +73,9 @@ section under `channels`, or both.
   Docker images set `ELSEAGENT_SANDBOX_MODE=danger-full-access`, giving Codex full access
   inside the container.
 
-- **API** · The [HTTP API](#http-api) and its web chat listen on `127.0.0.1:2923`. Change
-  `api.host` and `api.port`, set `api.token` to require a bearer token, or turn it off with
-  `api.enabled: false`. A host other than loopback requires a token. `api.webui: false`
-  keeps the API and drops the web chat.
+- **API** · The [HTTP API](#http-api) listens on `127.0.0.1:2923`. Change `api.host` and
+  `api.port`, set `api.token` to require a bearer token, or turn it off with
+  `api.enabled: false`. A host other than loopback requires a token.
 
 Use `elseagent init -o ./config.yaml` to write elsewhere and `-f` to overwrite. Use
 `elseagent run -c ./config.yaml` to select a file and `--dry-run` to check the config and
@@ -168,18 +167,6 @@ everyone who can talk to it.
 
 Records live in the agent's SQLite database, independent of Codex sessions. Updates use
 the last-read version to prevent one turn from overwriting another's changes.
-
-## Web chat
-
-Open `http://127.0.0.1:2923/` while the agent runs. Sessions are listed on the left, and a
-conversation shows the agent's commands, file changes and tool calls as it works, then its
-reply. Attach files with the paperclip, by pasting, or by dropping them on the message box;
-files the agent sends back can be downloaded, and pictures are shown in the chat. Each session is a conversation with its own Codex session, like a Slack thread. With
-`api.token` set, the page asks for the token once and keeps it in the browser. It works on
-a phone, and has light and dark themes that follow the system unless you pick one.
-
-The page is built into the `elseagent` binary and uses the [HTTP API](#http-api) below.
-Set `api.webui: false` to serve the API alone.
 
 ## HTTP API
 
@@ -288,7 +275,7 @@ an `api.token` and publish port 2923.
 ### Docker Compose
 
 Copy `.config.example.yaml` to `config.yaml` next to [compose.yaml](compose.yaml). Uncomment
-and fill in the channels you use, or open the API as described above to use the web chat.
+and fill in the channels you use, or open the API as described above.
 Optionally add tool credentials to `.env`.
 
 ```bash
@@ -319,20 +306,14 @@ bun install --frozen-lockfile
 bun run start -- --help
 bun run typecheck
 bun test
-bun run build                 # dist/elseagent, web chat included
+bun run build                 # dist/elseagent
 bun run db:generate           # After editing src/state/schema.ts
 ```
 
 Run `bun run lint` to apply formatting and lint fixes. Core code is in
 [src/agent](src/agent), channel adapters in [src/channels](src/channels), the MCP
-server in [src/mcp](src/mcp), the HTTP API in [src/api](src/api), the web chat in
-[src/web](src/web), and migrations in [drizzle](drizzle).
-
-The web chat is React with Tailwind and [shadcn/ui](https://ui.shadcn.com) components
-(copied into [src/web/components/ui](src/web/components/ui)). Bun bundles it: from source
-through the plugin in [bunfig.toml](bunfig.toml), and into the binary through
-[scripts/build.ts](scripts/build.ts), because `bun build --compile` on the command line
-cannot run the Tailwind plugin.
+server in [src/mcp](src/mcp), the HTTP API in [src/api](src/api), and migrations in
+[drizzle](drizzle).
 
 To add a channel, implement [`ConnectedChannel`](src/channels/types.ts) and register its factory
 in [adapters.ts](src/channels/adapters.ts). Normalize incoming messages before handing

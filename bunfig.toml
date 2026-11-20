@@ -1,4 +1,0 @@
-# Tailwind for the web UI (src/web) when it is served from source; scripts/build.ts
-# applies the same plugin to the compiled binary.
-[serve.static]
-plugins = ["bun-plugin-tailwind"]
