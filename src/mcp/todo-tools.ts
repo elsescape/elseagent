@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AdminError } from "../agent/admin.ts";
-import { TODO_STATUSES, type TodoStore } from "../state/todos.ts";
+import { TODO_FILTERS, TODO_STATUSES, type TodoStore } from "../state/todos.ts";
 import { callTool, type ToolGroup } from "./tools.ts";
 
 const titleInput = z.string().trim().min(1).max(160);
@@ -14,7 +14,7 @@ export function createTodoTools(store: TodoStore): ToolGroup {
         description:
           "List the agent's shared, persistent todos. Defaults to pending and in-progress todos.",
         inputSchema: {
-          status: z.enum(["active", "all", ...TODO_STATUSES]).default("active"),
+          status: z.enum(TODO_FILTERS).default("active"),
           limit: z.number().int().min(1).max(50).default(20),
         },
         annotations: { readOnlyHint: true, openWorldHint: false },

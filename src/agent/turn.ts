@@ -22,6 +22,7 @@ import {
 import type { MessageQueue, QueuedMessage, SessionStore, UsageStore } from "../state/index.ts";
 import { MINUTE_MS } from "../util/time.ts";
 import {
+  attachedFilePath,
   attachmentsDir,
   describeFiles,
   isImage,
@@ -142,6 +143,24 @@ type Said = Pick<ContextMessage, "user" | "text"> & { saved?: SavedFile[] };
 
 const line = (m: Said, workspace: string) =>
   [`<@${m.user}>: ${m.text}`, ...describeFiles(m.saved ?? [], workspace)].join("\n");
+
+/**
+ * A message as `formatInput` wrote it for Codex when nothing else was said (a direct message
+ * with no thread context), taken apart again: who said it, what, and the files listed under
+ * it. Anything else comes back whole, from nobody. (Text that itself ends in a line shaped like
+ * a file line can't be told from one.)
+ */
+export function parseInput(input: string): { user: string; text: string; files: string[] } {
+  const lines = input.split("\n");
+  const files: string[] = [];
+  for (let path = attachedFilePath(lines.at(-1) ?? ""); path !== null; ) {
+    files.unshift(path);
+    lines.pop();
+    path = attachedFilePath(lines.at(-1) ?? "");
+  }
+  const said = /^<@([^>\s]+)>: ([\s\S]*)$/.exec(lines.join("\n"));
+  return { user: said?.[1] ?? "", text: said?.[2] ?? lines.join("\n"), files };
+}
 
 /** How a follow-up is introduced: a reply to the agent, which may be a mere acknowledgement. */
 export const FOLLOWUP_LABEL =
@@ -462,7 +481,7 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
             const text = showStatus && describeItem(item);
             if (text) status.set(text);
           },
-          deps.onEvent && ((event) => deps.onEvent?.(message, event)),
+          (event) => deps.onEvent?.(message, event),
         );
       };
       let result: Awaited<ReturnType<typeof runStreamed>>;
@@ -556,5 +575,7 @@ export function createTurnRunner(deps: TurnDeps): TurnRunner {
       await unreact("working");
       if (failed && stopReason(signal)?.kind !== "superseded") await react("failed");
     }
+    if (!failed) return "completed";
+    return stopReason(signal) ? "stopped" : timeout.aborted ? "timed_out" : "failed";
   };
 }

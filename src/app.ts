@@ -8,7 +8,7 @@ import { RecoveryStore } from "./agent/recovery.ts";
 import { Scheduler } from "./agent/scheduler.ts";
 import { ScheduleRunner } from "./agent/schedules.ts";
 import { createTurnRunner, RESTARTED_REPLY } from "./agent/turn.ts";
-import { createApiChat } from "./api/channel.ts";
+import { API_STATE_KEY, createApiChat } from "./api/channel.ts";
 import { EventHub } from "./api/events.ts";
 import { startApiServer } from "./api/server.ts";
 import { configuredChannelNames, connectChannels } from "./channels/adapters.ts";
@@ -95,7 +95,7 @@ export async function startApp(
     const chatChannels = await connectChannels(config.channels, signal);
     // One database per agent, named after its bot, so several agents can share a state directory.
     // An agent without a chat service is named after its API.
-    const dbPath = join(stateDir, `${chatChannels[0]?.stateKey ?? "api"}.sqlite`);
+    const dbPath = join(stateDir, `${chatChannels[0]?.stateKey ?? API_STATE_KEY}.sqlite`);
     const db = openStateDb(dbPath);
     defer("state database", () => db.$client.close());
     // The HTTP API is a channel too: its chat sessions run through the same queue and turns.

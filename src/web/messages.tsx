@@ -14,7 +14,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { marked } from "marked";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import { FileList } from "./files.tsx";
 import { cn } from "./lib/utils.ts";
@@ -102,7 +102,11 @@ function Step({
 
 const mono = "font-mono text-xs";
 
-function Activity({ item, done }: { item: ThreadItem; done: boolean }) {
+/**
+ * Memoized: while a turn streams, every event re-renders the conversation, and a step's
+ * details (a command's whole output) should not be rebuilt for steps that did not change.
+ */
+const Activity = memo(function Activity({ item, done }: { item: ThreadItem; done: boolean }) {
   const failed = "status" in item && item.status === "failed";
   const state: StepState = failed ? "failed" : done ? "done" : "running";
   switch (item.type) {
@@ -180,7 +184,7 @@ function Activity({ item, done }: { item: ThreadItem; done: boolean }) {
         </div>
       );
   }
-}
+});
 
 /**
  * The steps Codex took in a row. Open while they are happening, so the work can be watched;

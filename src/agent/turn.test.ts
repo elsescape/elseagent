@@ -13,6 +13,7 @@ import {
   isNewSessionCommand,
   NEW_SESSION_REPLY,
   PASSIVE_LABEL,
+  parseInput,
   type TurnDeps,
 } from "./turn.ts";
 
@@ -384,6 +385,50 @@ describe("/new", () => {
   });
 });
 
+describe("parseInput", () => {
+  const direct = { user: "web", scheduleId: null, mode: "direct" as const };
+  const nothing = { messages: [], omitted: 0 };
+
+  test("takes apart what formatInput wrote for a direct message", () => {
+    const saved = [
+      { name: "a (1).png", mimetype: "image/png", size: 2048, path: "/w/attachments/s/a (1).png" },
+      { name: "notes.txt", path: "/w/attachments/s/notes.txt" },
+    ];
+    const text = "compare these\nnot a file: [attached file: x.png]";
+    expect(parseInput(formatInput({ ...direct, text, saved }, nothing, "/w"))).toEqual({
+      user: "web",
+      text,
+      files: ["attachments/s/a (1).png", "attachments/s/notes.txt"],
+    });
+    expect(
+      parseInput(formatInput({ ...direct, text: "", saved: saved.slice(0, 1) }, nothing, "/w")),
+    ).toEqual({ user: "web", text: "", files: ["attachments/s/a (1).png"] });
+    expect(parseInput(formatInput({ ...direct, text: "hi" }, nothing))).toEqual({
+      user: "web",
+      text: "hi",
+      files: [],
+    });
+  });
+
+  test("leaves anything else whole: a scheduled prompt, a file that was not saved", () => {
+    const prompt = "Check the queue\nand report";
+    expect(parseInput(formatInput({ ...direct, scheduleId: 3, text: prompt }, nothing))).toEqual({
+      user: "",
+      text: prompt,
+      files: [],
+    });
+    const failed = formatInput(
+      { ...direct, text: "hi", saved: [{ name: "b.png", error: "gone" }] },
+      nothing,
+    );
+    expect(parseInput(failed)).toEqual({
+      user: "web",
+      text: "hi\n[attached file b.png: could not be downloaded (gone)]",
+      files: [],
+    });
+  });
+});
+
 describe("Codex events", () => {
   test("every event of a turn is handed to onEvent with its message", async () => {
     const item: ThreadItem = { id: "r", type: "reasoning", text: "hm" };
@@ -426,6 +471,68 @@ describe("Codex events", () => {
       ["hello", "item.completed"],
       ["hello", "turn.completed"],
     ]);
+  });
+});
+
+describe("turn outcome", () => {
+  const message: QueuedMessage = {
+    id: 1,
+    conversationKey: "C1:1.0",
+    channel: "C1",
+    ts: "1.0",
+    threadTs: "1.0",
+    user: "U1",
+    text: "hello",
+    scheduleId: null,
+    mode: "direct",
+    files: [],
+  };
+  const runner = (behave: Parameters<typeof fakeCodex>[0], turnTimeoutMs = 1_000) =>
+    createTurnRunner({
+      codexFor: () => fakeCodex(behave).codex,
+      sessions: new SessionStore(openStateDb(":memory:")),
+      queue: { hasNewerPending: () => true },
+      threadOptions: {},
+      replyTo: () => ({
+        post: async () => undefined,
+        react: async () => {},
+        unreact: async () => {},
+        setStatus: async () => {},
+      }),
+      threadContext: async () => ({ messages: [], omitted: 0 }),
+      download: async () => {},
+      turnTimeoutMs,
+      sessionIdleMs: 1_000,
+      logger: { warn: () => {} },
+    });
+  const live = () => new AbortController().signal;
+  const untilAborted = (_input: string, signal: AbortSignal) =>
+    new Promise<string>((_resolve, reject) => {
+      const fail = () => reject(new Error("aborted"));
+      if (signal.aborted) fail();
+      else signal.addEventListener("abort", fail);
+    });
+
+  test("the runner says how the turn ended", async () => {
+    expect(await runner(async () => json("done"))(message, live())).toBe("completed");
+    const failing = runner(async () => {
+      throw new Error("boom");
+    });
+    expect(await failing(message, live())).toBe("failed");
+    expect(await runner(untilAborted, 20)(message, live())).toBe("timed_out");
+    const stop = new AbortController();
+    const stopped = runner(untilAborted)(message, stop.signal);
+    stop.abort({ kind: "cancelled", by: "U2" });
+    expect(await stopped).toBe("stopped");
+  });
+
+  test("and says nothing when no turn ran", async () => {
+    // A passive message a later one will cover, and the /new command.
+    expect(
+      await runner(async () => json("x"))({ ...message, mode: "passive" }, live()),
+    ).toBeUndefined();
+    const reset = { ...message, ts: "", threadTs: null, text: "/new" };
+    expect(await runner(async () => json("x"))(reset, live())).toBeUndefined();
   });
 });
 

@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { Button } from "./components/ui/button.tsx";
-import { type Pending, PendingFile } from "./files.tsx";
+import { isUploading, type Pending, PendingFile } from "./files.tsx";
 import { cn } from "./lib/utils.ts";
 
 const MAX_HEIGHT = 200;
@@ -38,7 +38,7 @@ export function Composer({
   const input = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
 
-  const uploading = pending.some((p) => !p.path && !p.error);
+  const uploading = pending.some(isUploading);
   const ready = pending.some((p) => p.path);
   const canSend = (text.trim() !== "" || ready) && !uploading;
   const submit = () => {
@@ -123,7 +123,8 @@ export function Composer({
           onPaste={onPaste}
           placeholder="Message the agent…"
           // 16px on phones: anything smaller makes iOS zoom the page on focus.
-          className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground md:text-[0.9375rem]"
+          style={{ maxHeight: MAX_HEIGHT }}
+          className="min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground md:text-[0.9375rem]"
         />
         {busy && !canSend ? (
           <Button size="icon" className="rounded-full" onClick={onStop} title="Stop">

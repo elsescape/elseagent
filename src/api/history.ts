@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import type { ThreadItem } from "@openai/codex-sdk";
 import { parseReply } from "../agent/reply.ts";
+import { parseInput } from "../agent/turn.ts";
 import { codexHome, rolloutPath } from "../codex.ts";
 import type { EventFile, SessionEvent, SessionEventBody } from "./events.ts";
 
@@ -26,6 +27,8 @@ const contentText = (content: unknown) =>
     .map((part) => (isObject(part) ? str(part.text) : ""))
     .filter(Boolean)
     .join("\n");
+
+const namedFile = (path: string): EventFile => ({ name: basename(path), path });
 
 /** One argument as a shell would need it written, the way Codex prints commands. */
 function shellQuote(arg: string): string {
@@ -95,31 +98,13 @@ export function threadItem(item: Json): ThreadItem | null {
         status: status(item.status, ["in_progress", "completed", "failed"], "completed"),
       };
     }
-    case "Extension":
+    case "Extension": // Codex's own tools; the web search is the one the SDK has an item for
+      return item.kind === "web.search" ? { id, type: "web_search", query: str(item.query) } : null;
     case "WebSearch":
-      if (item.type === "Extension" && item.kind !== "web.search") return null;
       return { id, type: "web_search", query: str(item.query) };
     default:
       return null;
   }
-}
-
-/** How elseagent writes a chat message for Codex: `<@USER>: text` (see formatInput). */
-const ADDRESSED = /^<@([^>\s]+)>: /;
-/** How it lists a file attached to the message, on a line of its own (see describeFiles). */
-const ATTACHED = /^\[attached file: (.+?)(?: \([^()]*\))?\]$/;
-
-/** A user message as it was written: its text, and the files listed under it. */
-function userMessage(raw: string): { text: string; user: string; files: EventFile[] } {
-  const lines = raw.split("\n");
-  const files: EventFile[] = [];
-  for (let path = ATTACHED.exec(lines.at(-1) ?? "")?.[1]; path; ) {
-    files.unshift({ name: basename(path), path });
-    lines.pop();
-    path = ATTACHED.exec(lines.at(-1) ?? "")?.[1];
-  }
-  const text = lines.join("\n");
-  return { text: text.replace(ADDRESSED, ""), user: ADDRESSED.exec(text)?.[1] ?? "", files };
 }
 
 export interface HistoryOptions {
@@ -152,7 +137,8 @@ export function rolloutEvents(jsonl: string, { before }: HistoryOptions = {}): S
   };
 
   for (const line of jsonl.split("\n")) {
-    if (!line.trim()) continue;
+    // Most of a rollout is model input and output we don't read; skip it before parsing.
+    if (!line.includes('"event_msg"')) continue;
     let record: unknown;
     try {
       record = JSON.parse(line);
@@ -171,7 +157,9 @@ export function rolloutEvents(jsonl: string, { before }: HistoryOptions = {}): S
       // Not part of a turn we are reading.
     } else if (payload.type === "item_completed" && isObject(payload.item)) {
       if (payload.item.type === "UserMessage") {
-        emit({ type: "user_message", ...userMessage(contentText(payload.item.content)) });
+        // The input as elseagent wrote it for Codex, read back as what the user sent.
+        const { user, text, files } = parseInput(contentText(payload.item.content));
+        emit({ type: "user_message", user, text, files: files.map(namedFile) });
         start();
         continue;
       }
@@ -188,7 +176,7 @@ export function rolloutEvents(jsonl: string, { before }: HistoryOptions = {}): S
           type: "reply",
           text: reply.message,
           choices: reply.choices,
-          files: reply.files.map((path) => ({ name: basename(path), path })),
+          files: reply.files.map(namedFile),
         });
       }
       end("completed");

@@ -7,35 +7,44 @@ import { cn } from "./lib/utils.ts";
 /** Pictures a browser shows safely as an image (an SVG can carry scripts). */
 export const isPicture = (name: string) => /\.(png|jpe?g|gif|webp)$/i.test(name);
 
-/** Each workspace file is fetched once per page; its object URL is reused. */
-const urls = new Map<string, Promise<string>>();
-function objectUrl(path: string): Promise<string> {
-  let url = urls.get(path);
+/** The pictures of the session on screen, fetched once each; forgotten with the session. */
+const pictures = new Map<string, Promise<string>>();
+function pictureUrl(path: string): Promise<string> {
+  let url = pictures.get(path);
   if (!url) {
     url = api.file(path).then((blob) => URL.createObjectURL(blob));
-    urls.set(path, url);
-    url.catch(() => urls.delete(path)); // try again next time
+    pictures.set(path, url);
+    url.catch(() => pictures.delete(path)); // try again next time
   }
   return url;
 }
 
-/** Save a workspace file through the browser's own download. */
+/** Let go of the pictures held for the session being left. */
+export function forgetPictures(): void {
+  for (const url of pictures.values()) url.then(URL.revokeObjectURL, () => {});
+  pictures.clear();
+}
+
+/** Save a workspace file through the browser's own download; nothing of it is kept here. */
 async function download(file: EventFile): Promise<void> {
+  const url = URL.createObjectURL(await api.file(file.path));
   const link = document.createElement("a");
-  link.href = await objectUrl(file.path);
+  link.href = url;
   link.download = file.name;
   link.click();
+  // The click has handed the URL to the browser's downloader by the next task.
+  setTimeout(() => URL.revokeObjectURL(url));
 }
 
 /** A file of the conversation: a picture as a thumbnail, anything else as a chip. Click to save. */
-export function FileLink({ file }: { file: EventFile }) {
+function FileLink({ file }: { file: EventFile }) {
   const picture = isPicture(file.name);
   const [src, setSrc] = useState<string>();
   const [state, setState] = useState<"idle" | "busy" | "missing">("idle");
   useEffect(() => {
     if (!picture) return;
     let current = true;
-    objectUrl(file.path)
+    pictureUrl(file.path)
       .then((url) => current && setSrc(url))
       .catch(() => current && setState("missing"));
     return () => {
@@ -117,8 +126,11 @@ export interface Pending {
   error?: string;
 }
 
+/** Still on its way: not saved yet, and not failed. */
+export const isUploading = (pending: Pending) => !pending.path && !pending.error;
+
 export function PendingFile({ pending, onRemove }: { pending: Pending; onRemove: () => void }) {
-  const uploading = !pending.path && !pending.error;
+  const uploading = isUploading(pending);
   return (
     <div
       title={pending.error ?? pending.file.name}

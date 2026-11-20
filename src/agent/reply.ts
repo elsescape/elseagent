@@ -44,24 +44,37 @@ export const REPLY_SCHEMA = {
 const MAX_CHOICES = 5;
 const MAX_CHOICE_LENGTH = 75;
 
+/** The reply object in Codex's final response, or null when it is anything else. */
+function replyJson(text: string): Partial<AgentReply> | null {
+  if (!text.trimStart().startsWith("{")) return null;
+  try {
+    const raw = JSON.parse(text) as Partial<AgentReply> | null;
+    return typeof raw?.message === "string" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a message of Codex's is its final response in the reply schema, rather than
+ * something it said along the way. (A chat UI shows the parsed reply instead of the JSON.)
+ */
+export const isReplyJson = (text: string) => replyJson(text) !== null;
+
 /** Parse Codex's final response. Anything that isn't the expected JSON is posted as plain text. */
 export function parseReply(finalResponse: string): AgentReply {
-  try {
-    const raw = JSON.parse(finalResponse) as Partial<AgentReply>;
-    if (typeof raw.message !== "string") throw new Error("no message");
-    const choices = (Array.isArray(raw.choices) ? raw.choices : [])
-      .filter((c): c is string => typeof c === "string")
-      .map((c) => c.trim())
-      .filter((c, i, all) => c && all.indexOf(c) === i)
-      .slice(0, MAX_CHOICES)
-      .map((c) => truncate(c, MAX_CHOICE_LENGTH));
-    const files = (Array.isArray(raw.files) ? raw.files : []).filter(
-      (f): f is string => typeof f === "string" && f.trim() !== "",
-    );
-    return { reply: raw.reply !== false, message: raw.message, choices, files };
-  } catch {
-    return { reply: true, message: finalResponse, choices: [], files: [] };
-  }
+  const raw = replyJson(finalResponse);
+  if (!raw) return { reply: true, message: finalResponse, choices: [], files: [] };
+  const choices = (Array.isArray(raw.choices) ? raw.choices : [])
+    .filter((c): c is string => typeof c === "string")
+    .map((c) => c.trim())
+    .filter((c, i, all) => c && all.indexOf(c) === i)
+    .slice(0, MAX_CHOICES)
+    .map((c) => truncate(c, MAX_CHOICE_LENGTH));
+  const files = (Array.isArray(raw.files) ? raw.files : []).filter(
+    (f): f is string => typeof f === "string" && f.trim() !== "",
+  );
+  return { reply: raw.reply !== false, message: raw.message ?? "", choices, files };
 }
 
 /** Scheduled results longer than this (characters or lines) are summarized, with details in the thread. */

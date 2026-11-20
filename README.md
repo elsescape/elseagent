@@ -334,7 +334,7 @@ through the plugin in [bunfig.toml](bunfig.toml), and into the binary through
 [scripts/build.ts](scripts/build.ts), because `bun build --compile` on the command line
 cannot run the Tailwind plugin.
 
-To add a channel, implement [`Channel`](src/channels/types.ts) and register its factory
+To add a channel, implement [`ConnectedChannel`](src/channels/types.ts) and register its factory
 in [adapters.ts](src/channels/adapters.ts). Normalize incoming messages before handing
 them to the agent. Use a distinct prefix for new chat IDs and keep the adapter's
 `stateKey` stable so persisted queue entries and sessions remain reachable after restart.

@@ -1,16 +1,16 @@
 import type { ChannelsConfig } from "../config/index.ts";
 import { createSlackBot } from "./slack/index.ts";
 import { createTelegramBot } from "./telegram/index.ts";
-import type { Channel } from "./types.ts";
+import type { ConnectedChannel } from "./types.ts";
 
 function adapter<K extends keyof ChannelsConfig>(
   name: K,
-  create: (config: NonNullable<ChannelsConfig[K]>) => Promise<Channel>,
+  create: (config: NonNullable<ChannelsConfig[K]>) => Promise<ConnectedChannel>,
 ) {
   return {
     name,
     enabled: (config: ChannelsConfig) => config[name] !== undefined,
-    async connect(config: ChannelsConfig): Promise<Channel | undefined> {
+    async connect(config: ChannelsConfig): Promise<ConnectedChannel | undefined> {
       const options = config[name];
       if (options !== undefined) return create(options);
     },
@@ -29,8 +29,8 @@ export function configuredChannelNames(config: ChannelsConfig): string[] {
 export async function connectChannels(
   config: ChannelsConfig,
   signal: AbortSignal,
-): Promise<Channel[]> {
-  const connected: Channel[] = [];
+): Promise<ConnectedChannel[]> {
+  const connected: ConnectedChannel[] = [];
   for (const entry of adapters) {
     signal.throwIfAborted();
     const channel = await entry.connect(config);

@@ -6,15 +6,12 @@ import type { Channel, Reply } from "./types.ts";
 const fake = (platform: Channel["platform"], prefix: string): Channel => ({
   platform,
   label: platform,
-  stateKey: `${platform}-test`,
   instructions: "",
   owns: (channel) => channel.startsWith(prefix),
   replyTo: () => ({ platform }) as unknown as Reply,
   threadContext: async () => ({ messages: [{ user: platform, text: "" }], omitted: 0 }),
   download: async () => {},
   ensureChannel: async (ref) => `${platform}:${ref}`,
-  start: async () => {},
-  stop: async () => {},
 });
 
 test("each call goes to the channel that owns the chat ID", async () => {
@@ -33,7 +30,7 @@ test("a chat ID no channel owns is an error", () => {
   expect(() => new Channels([])).toThrow();
 });
 
-test("additional namespaced adapters coexist with existing chat IDs and state", () => {
+test("additional namespaced adapters coexist with existing chat IDs", () => {
   const slack = { ...fake("slack", "C"), owns: (chat: string) => !chat.includes(":") };
   const telegram = fake("telegram", "tg:");
   const socket = fake("socket", "local:");
@@ -41,8 +38,6 @@ test("additional namespaced adapters coexist with existing chat IDs and state", 
   expect(channels.for("local:1")).toBe(socket);
   expect(channels.for("tg:1")).toBe(telegram);
   expect(channels.for("#ops")).toBe(slack);
-  expect(channels.stateKey).toBe(slack.stateKey);
-  expect(new Channels([telegram]).stateKey).toBe(telegram.stateKey);
   expect(() => channels.for("unknown:1")).toThrow("doesn't belong");
 });
 

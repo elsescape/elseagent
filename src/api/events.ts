@@ -1,4 +1,5 @@
 import type { ThreadEvent } from "@openai/codex-sdk";
+import { MINUTE_MS } from "../util/time.ts";
 
 export type TurnStatus = "completed" | "failed" | "interrupted";
 
@@ -11,6 +12,16 @@ export interface EventFile {
    */
   path: string;
 }
+
+/** A file as an upload returns it: where it was saved, and what it is. */
+export interface UploadedFile extends EventFile {
+  /** In bytes. */
+  size: number;
+  mimetype?: string;
+}
+
+/** Whether a session has a turn running, a message waiting for one, or neither. */
+export type SessionStatus = "running" | "queued" | "idle";
 
 /**
  * What happens in an API chat session, in order. One user message leads to one turn:
@@ -47,7 +58,7 @@ interface Stream {
   idleSince: number | null;
 }
 
-export interface EventHubOptions {
+interface EventHubOptions {
   /** Events kept per session; older ones are dropped. */
   maxEvents?: number;
   /** How long a finished turn's events stay available to a stream resuming after a cursor. */
@@ -68,7 +79,11 @@ export class EventHub {
   private readonly retainMs: number;
   private readonly now: () => number;
 
-  constructor({ maxEvents = 5000, retainMs = 5 * 60_000, now = Date.now }: EventHubOptions = {}) {
+  constructor({
+    maxEvents = 5000,
+    retainMs = 5 * MINUTE_MS,
+    now = Date.now,
+  }: EventHubOptions = {}) {
     this.maxEvents = maxEvents;
     this.retainMs = retainMs;
     this.now = now;

@@ -3,7 +3,7 @@ import { ConfigError, type SlackConfig } from "../../config/index.ts";
 import { dispatchMessage } from "../dispatch.ts";
 import { replyParts } from "../markdown.ts";
 import {
-  type Channel,
+  type ConnectedChannel,
   type IncomingMessage,
   type Logger,
   NEW_SESSION_COMMAND,
@@ -43,7 +43,7 @@ export interface SlackIdentity {
   teamId: string;
 }
 
-export interface SlackBot extends Channel {
+export interface SlackBot extends ConnectedChannel {
   platform: "slack";
   identity: SlackIdentity;
 }
