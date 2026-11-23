@@ -72,7 +72,7 @@ jobs:
         run: test "$(dist/elseagent --version)" = "$VERSION"
       - name: Package
         run: tar -C dist -czf "elseagent-$VERSION-${{ matrix.target }}.tar.gz" elseagent
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: elseagent-${{ matrix.target }}
           path: elseagent-*.tar.gz
@@ -84,7 +84,7 @@ jobs:
       contents: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       - run: sha256sum elseagent-*.tar.gz > checksums.txt
@@ -96,7 +96,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" elseagent-*.tar.gz checksums.txt
           --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
           ${{ contains(github.ref_name, '-') && '--prerelease' || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: checksums
           path: checksums.txt
@@ -111,7 +111,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: checksums
       - uses: actions/checkout@v7
